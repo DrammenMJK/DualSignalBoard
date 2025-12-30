@@ -1,0 +1,33 @@
+# Arduino IDE generated files/folders to ignore
+
+# Built objects and temporary files
+build/
+.arduino/
+*.o
+*.elf
+*.hex
+*.bin
+*.eep
+*.d
+
+# Visual Studio and Visual Micro specific files if used
+_vm/
+*.vsarduino.h
+*.vcxproj*
+*.suo
+*.user
+*.config
+ipch/
+Debug/
+Release/
+
+# OS generated files
+.DS_Store
+.directory
+
+# Optional: Ignore all extra files and only track .ino, .h, .cpp
+# Adjust as needed if you have other source files
+#*.*
+#!*.ino
+#!*.h
+#!*.cpp
