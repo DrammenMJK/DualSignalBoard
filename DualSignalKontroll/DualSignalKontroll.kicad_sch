@@ -3118,6 +3118,26 @@
 		)
 		(uuid "66180460-0944-4d1e-a1cd-a4cb4308f14f")
 	)
+	(text "A\nGreen"
+		(exclude_from_sim no)
+		(at 210.566 25.146 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "6b3d2d6a-9486-46fa-9caa-3049d5e2bdba")
+	)
+	(text "Train"
+		(exclude_from_sim no)
+		(at 204.724 24.13 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "70dee99c-58bd-4848-aefb-f15b4b8d9b32")
+	)
 	(text "+10V\n\nGnd"
 		(exclude_from_sim no)
 		(at 57.658 105.664 0)
@@ -3198,6 +3218,16 @@
 		)
 		(uuid "c56b04a8-ba54-4443-80b0-a4d56ccc3c18")
 	)
+	(text "B\nGreen"
+		(exclude_from_sim no)
+		(at 216.916 25.146 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "ca082728-9ec6-4d8d-bf4e-314f913b10e4")
+	)
 	(text "1.0"
 		(exclude_from_sim no)
 		(at 271.018 193.294 0)
@@ -3247,6 +3277,16 @@
 			)
 		)
 		(uuid "ee35fd22-d74b-4e75-a7e3-1b78a9883718")
+	)
+	(text "Direction\nOn: B->A"
+		(exclude_from_sim no)
+		(at 195.834 24.892 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "f2b1667c-595a-4a76-883b-5f87346de605")
 	)
 	(junction
 		(at 96.52 129.54)
