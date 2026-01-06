@@ -72,17 +72,25 @@ private:
   uint32_t _changedAt = 0;
 };
 
-enum class DebugMode : uint8_t { Off,
-                                 AllOn,
-                                 Auto,
-                                 Manual };
+// Debug states: 0=OFF, 1=ALL_ON, 2=CYCLE, 3=MAN_0, 4=MAN_1, 5=MAN_2, 6=MAN_3, 7=MAN_4, 8=MAN_5
+static const uint8_t DBG_OFF = 0;
+static const uint8_t DBG_ALL_ON = 1;
+static const uint8_t DBG_CYCLE = 2;
+static const uint8_t DBG_MAN_0 = 3;
+static const uint8_t DBG_MAN_1 = 4;
+static const uint8_t DBG_MAN_2 = 5;
+static const uint8_t DBG_MAN_3 = 6;
+static const uint8_t DBG_MAN_4 = 7;
+static const uint8_t DBG_MAN_5 = 8;
 
 static const int EepromAddrStateQ = 0;
 
 static bool g_stateQ = false;  // false => A green end, true => B green end
-static DebugMode g_dbgMode = DebugMode::Off;
-static uint8_t g_dbgStep = 0;
+static uint8_t g_dbgState = DBG_OFF;
+static uint8_t g_cycleStep = 0;      // for CYCLE mode LED stepping
 static uint32_t g_dbgLast = 0;
+static uint8_t g_flashCount = 6;     // for exit flash sequence (6 = complete/not flashing)
+static bool g_flashOn = false;
 
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
@@ -144,54 +152,55 @@ static void ApplyNormalOutputs(bool train, bool scaClosed, bool scbClosed, bool 
   WriteLamp(Pins::B_G2, bGen && scbClosed);
 }
 
-static void AdvanceDebugMode() {
-  if (g_dbgMode == DebugMode::Off) {
-    g_dbgMode = DebugMode::AllOn;
-    g_dbgStep = 0;
-    return;
-  }
-  if (g_dbgMode == DebugMode::AllOn) {
-    g_dbgMode = DebugMode::Auto;
-    g_dbgStep = 0;
+static void AdvanceDebugState() {
+  if (g_dbgState == DBG_MAN_5) {
+    // Transition to OFF - start flash sequence
+    g_dbgState = DBG_OFF;
+    g_flashCount = 0;
+    g_flashOn = true;
     g_dbgLast = millis();
-    return;
+    SetAllLamps(true);
+  } else {
+    g_dbgState++;
+    if (g_dbgState == DBG_CYCLE) {
+      g_cycleStep = 0;
+      g_dbgLast = millis();
+    }
   }
-  if (g_dbgMode == DebugMode::Auto) {
-    g_dbgMode = DebugMode::Manual;
-    g_dbgStep = 0;
-    return;
-  }
-  g_dbgMode = DebugMode::Off;
-  g_dbgStep = 0;
 }
 
-static void RunDebug(uint32_t now, bool dbgPressed) {
-  if (g_dbgMode == DebugMode::AllOn) {
+static void RunDebug(uint32_t now) {
+  if (g_dbgState == DBG_ALL_ON) {
     SetAllLamps(true);
     return;
   }
 
-  if (g_dbgMode == DebugMode::Auto) {
+  if (g_dbgState == DBG_CYCLE) {
     if (now - g_dbgLast >= 1000) {
       g_dbgLast = now;
-      g_dbgStep = (g_dbgStep + 1) % 6;
+      g_cycleStep = (g_cycleStep + 1) % 6;
     }
-    SetOneLampByStep(g_dbgStep);
+    SetOneLampByStep(g_cycleStep);
     return;
   }
 
-  if (g_dbgMode == DebugMode::Manual) {
-    if (dbgPressed) {
-      g_dbgStep++;
-      if (g_dbgStep >= 6) {
-        g_dbgMode = DebugMode::Off;
-        g_dbgStep = 0;
-        SetAllLamps(false);
-        return;
-      }
-    }
-    SetOneLampByStep(g_dbgStep);
+  // MAN_0 to MAN_5: show one LED based on state (state 3 = step 0, state 8 = step 5)
+  if (g_dbgState >= DBG_MAN_0 && g_dbgState <= DBG_MAN_5) {
+    SetOneLampByStep(g_dbgState - DBG_MAN_0);
   }
+}
+
+// Returns true while flashing is in progress
+static bool RunExitFlash(uint32_t now) {
+  if (g_flashCount >= 6) return false;  // 3 on + 3 off = 6 transitions done
+
+  if (now - g_dbgLast >= 500) {
+    g_dbgLast = now;
+    g_flashOn = !g_flashOn;
+    g_flashCount++;
+    SetAllLamps(g_flashOn);
+  }
+  return true;
 }
 
 static void UpdateDebugLeds(bool train, bool q) {
@@ -219,9 +228,7 @@ static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool q) {
   Serial.print(" SCB=");
   Serial.print(scbClosed);
   Serial.print(" DBG=");
-  Serial.print((int)g_dbgMode);
-  Serial.print(" STEP=");
-  Serial.println(g_dbgStep);
+  Serial.println(g_dbgState);
 }
 
 void setup() {
@@ -270,24 +277,40 @@ void loop() {
   bool train = (digitalRead(Pins::Train) == LOW);
 
   bool dbgPressed = g_btnDbg.PressedEvent(DebounceMs);
-  if (dbgPressed) AdvanceDebugMode();
-
   bool pressedA = g_btnA.PressedEvent(DebounceMs);
   bool pressedB = g_btnB.PressedEvent(DebounceMs);
   bool anySignalPressed = pressedA || pressedB;
 
-  if (anySignalPressed && g_dbgMode != DebugMode::Off) {
-    g_dbgMode = DebugMode::Off;
+  // Handle exit flash sequence (runs after MAN_5 -> OFF transition)
+  if (g_dbgState == DBG_OFF && g_flashCount < 6) {
+    if (RunExitFlash(now)) {
+      UpdateDebugLeds(train, g_stateQ);
+      return;  // still flashing
+    }
+  }
+
+  // Cancel debug mode if signal button pressed
+  if (anySignalPressed && g_dbgState != DBG_OFF) {
+    g_dbgState = DBG_OFF;
+    g_flashCount = 6;  // skip flash sequence on cancel
     SetAllLamps(false);
+    UpdateDebugLeds(train, g_stateQ);
     return;  // cancel debug only; do not toggle direction on same press
   }
 
-  if (g_dbgMode != DebugMode::Off) {
-    RunDebug(now, dbgPressed);
+  // Advance debug state on debug button press
+  if (dbgPressed) {
+    AdvanceDebugState();
+  }
+
+  // Run debug mode if active
+  if (g_dbgState != DBG_OFF) {
+    RunDebug(now);
     UpdateDebugLeds(train, g_stateQ);
     return;
   }
 
+  // Normal operation
   if (!train) {
     if (pressedA && g_stateQ != false) {
       g_stateQ = false;  // Direction A -> B
@@ -297,7 +320,6 @@ void loop() {
       SaveStateQ();
     }
   }
-
 
   bool scaClosed = g_swA.IsActive(DebounceMs);
   bool scbClosed = g_swB.IsActive(DebounceMs);

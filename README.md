@@ -42,6 +42,7 @@ Direction changes **only on button press edges** and only when **no train is pre
 | Any | Any | No button press | Unchanged |
 
 Notes:
+
 - PBA and PBB are evaluated on the **press edge only**
 - Holding a button does **not** retrigger
 - Pressing the button corresponding to the current Direction has no effect
@@ -203,11 +204,11 @@ Notes:
 
 ### Debug State Sequence
 
-1. **All signal LEDs ON**
-2. **Automatic cycle** (1 s per LED):  
+1. ALL_ON (=1) **All signal LEDs ON**
+2. CYCLE (=2) **Automatic cycle** (1 s per LED):  
    A_G1 → A_G2 → A_R → B_G1 → B_G2 → B_R
-3. **Manual step** (one press per LED, same order)
-4. **Exit debug → normal operation**
+3. MAN_0 (=3), MAN_1 (=4) ... MAN_5 (=8) **Manual step** (one press per LED, same order)
+4. OFF (=0) (When enter state, Flash all 3 times, 0.5 sec between, then exit debug) **Exit debug → normal operation**
 
 - Any press of **signal button A or B**:
   - Cancels debug immediately
@@ -227,6 +228,13 @@ Notes:
 - Pushbutton A or B:
   - Toggles `g_stateQ` on **press edge**
   - Ignored if train present
+- Switch A or B closed:
+  - Green 1 for A or B  is On
+- Switch A or B thrown:
+  - Both Greens for A or B  are on.  
+
+- When a Train is present, both signals go Red. But state should be saved before this.
+- When train is no more present, state should be restored.
 
 ---
 
