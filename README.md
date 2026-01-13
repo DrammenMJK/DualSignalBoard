@@ -15,6 +15,9 @@ inputs and events.
 |----------|---------|
 | **A → B** | **Signal A** is the active green end |
 | **B → A** | **Signal B** is the active green end |
+| **None**  | **Signal A** and **Signal B** is both Red |
+
+Direction **None** is the default state.
 
 ---
 
@@ -26,26 +29,37 @@ inputs and events.
 | PBB | **Edge-triggered** | LOW (press) |
 | SCA | **Level-based** | LOW (Closed) |
 | SCB | **Level-based** | LOW (Closed) |
+| SCC | **Level-based** | LOW (Closed) |
 | Train | **Level-based** | LOW (Train present) |
 
 ---
 
 ### Direction State Transitions
 
-Direction changes **only on button press edges** and only when **no train is present**.
+Direction changes **only on button press edges** and only when **no train is present**, and only if the  direction is not "None".
+
+The possible directions are:
+
+**A → B**
+**B → A**
+**None**
 
 | Current Direction | Train present | Button event | Next Direction |
-|------------------|---------------|--------------|----------------|
-| Any | No | **PBA pressed** | **A → B** |
-| Any | No | **PBB pressed** | **B → A** |
-| Any | Yes | PBA or PBB pressed | Unchanged |
-| Any | Any | No button press | Unchanged |
+| ------------------ | --------------- | -------------- | ---------------- |
+| None | No | **PBA pressed** | **A → B** |
+| None | No | **PBB pressed** | **B → A** |
+| Any | No | PBA or PBB pressed | No change |
+| Any | Yes | PBA or PBB pressed| No change (stays None) |
 
 Notes:
 
 - PBA and PBB are evaluated on the **press edge only**
 - Holding a button does **not** retrigger
 - Pressing the button corresponding to the current Direction has no effect
+
+Switches affects the direction signals
+
+If any switch changes, then Direction is None thereafter. It does NOT change back.
 
 ---
 
@@ -56,8 +70,8 @@ Notes:
 | Train present | ON | OFF | OFF | ON | OFF | OFF |
 | Direction **A → B**, SCA open | OFF | ON | OFF | ON | OFF | OFF |
 | Direction **A → B**, SCA closed | OFF | ON | ON | ON | OFF | OFF |
-| Direction **B → A**, SCB open | ON | OFF | OFF | OFF | ON | OFF |
-| Direction **B → A**, SCB closed | ON | OFF | OFF | OFF | ON | ON |
+| Direction **B → A**, SCB open or SCC open | ON | OFF | OFF | OFF | ON | OFF |
+| Direction **B → A**, SCB closed and SCC closed | ON | OFF | OFF | OFF | ON | ON |
 
 ---
 
@@ -87,7 +101,7 @@ Notes:
 | Condition at Power-On | Resulting State |
 |----------------------|-----------------|
 | Debug button not held | Direction restored from EEPROM |
-| Debug button held | Direction forced to **A → B**, EEPROM reset |
+| Debug button held | Direction forced to **None**, EEPROM reset |
 
 ---
 
@@ -141,6 +155,7 @@ Notes:
 | Pushbutton B | D4 | 4 |
 | Switch A closed | D5 | 5 |
 | Switch B closed | D6 | 6 |
+| Switch B closed | A3 | A3 |
 | Debug button | A4 | A4 |
 | Serial enable jumper | A5 | A5 |
 
@@ -185,15 +200,6 @@ Notes:
 - Resistor: **1 kΩ**
 - LED current: **~3 mA**
 
-### Debug LED Pins and Meaning
-
-| Debug LED | Arduino Pin | LED ON means |
-|----------|-------------|--------------|
-| Direction (Q) | A0 | Signal **B** is the active green end (`g_stateQ = true`) |
-| Train | A1 | Train detected in block |
-| A_Gen | A2 | Signal A permitted to show green |
-| B_Gen | A3 | Signal B permitted to show green |
-
 ---
 
 ## Debug Button Behavior
@@ -218,44 +224,24 @@ Notes:
 
 ## Normal Signal Logic
 
-- State variable: `g_stateQ`
-  - `false` = A is green end
-  - `true`  = B is green end
+- Default Direction is None
+  Both signals are Red
 - Startup state:
-  - Restored from EEPROM
+  - Direction None
 - Train present:
-  - Both signals red
+  - Direction None
 - Pushbutton A or B:
-  - Toggles `g_stateQ` on **press edge**
+  - Sets direction only if Direction is None
   - Ignored if train present
-- Switch A or B closed:
-  - Green 1 for A or B  is On
-- Switch A or B thrown:
-  - Both Greens for A or B  are on.  
+- Switch A closed :
+  - Both Greens for A on.  
+- Switch B and C closed:
+  - Both Greens for B is on.
 
-- When a Train is present, both signals go Red. But state should be saved before this.
-- When train is no more present, state should be restored.
-
----
-
-## EEPROM Usage
-
-- EEPROM size: **1024 bytes**
-- Address map:
-  - **Address 0**: `g_stateQ`
-- Write method:
-  - `EEPROM.update()` (writes only on value change)
-- Write events:
-  - Only when `g_stateQ` toggles
-- EEPROM is **not** written during debug modes
+- When a Train is present, both signals go Red.
+- When train is no more present, signals stay Red.
 
 ---
-
-## EEPROM Reset / Recovery Procedure
-
-### Purpose
-
-Restore the controller to a **known, safe state** if behavior becomes invalid.
 
 ### Reset Mechanism
 
