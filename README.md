@@ -67,11 +67,13 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
 
 | Condition | Signal A – Red | Signal A – Green 1 | Signal A – Green 2 | Signal B – Red | Signal B – Green 1 | Signal B – Green 2 |
 |----------|----------------|-------------------|-------------------|----------------|-------------------|-------------------|
-| Train present | ON | OFF | OFF | ON | OFF | OFF |
-| Direction **A → B**, SCA open | OFF | ON | OFF | ON | OFF | OFF |
-| Direction **A → B**, SCA closed | OFF | ON | ON | ON | OFF | OFF |
-| Direction **B → A**, SCB open or SCC open | ON | OFF | OFF | OFF | ON | OFF |
-| Direction **B → A**, SCB closed and SCC closed | ON | OFF | OFF | OFF | ON | ON |
+| Direction **None** (or Train present) | ON | OFF | OFF | ON | OFF | OFF |
+| Direction **A → B**, SCB open | ON | OFF | OFF | ON | OFF | OFF |
+| Direction **A → B**, SCB closed, SCA open | OFF | ON | OFF | ON | OFF | OFF |
+| Direction **A → B**, SCB closed, SCA closed | OFF | ON | ON | ON | OFF | OFF |
+| Direction **B → A**, SCB open | ON | OFF | OFF | ON | OFF | OFF |
+| Direction **B → A**, SCB closed, SCC open | ON | OFF | OFF | OFF | ON | OFF |
+| Direction **B → A**, SCB closed, SCC closed | ON | OFF | OFF | OFF | ON | ON |
 
 ---
 

@@ -1,5 +1,14 @@
 #include <EEPROM.h>
 
+// Uncomment to enable serial monitor output
+#define SERIAL_MONITOR_ENABLED
+
+enum Direction {
+  DIR_NONE = 0,
+  DIR_A_TO_B = 1,
+  DIR_B_TO_A = 2
+};
+
 struct Pins {
   // Inputs (active-low)
   static const uint8_t Train = 2;
@@ -7,6 +16,7 @@ struct Pins {
   static const uint8_t PBB = 4;  // Pushbutton B
   static const uint8_t SCA = 5;  // Switch A closed
   static const uint8_t SCB = 6;  // Switch B closed
+  static const uint8_t SCC = A3; // Switch C closed
   static const uint8_t Debug = A4;
   static const uint8_t SerialEnable = A5;
 
@@ -19,12 +29,6 @@ struct Pins {
   static const uint8_t B_R = 10;
   static const uint8_t B_G1 = 12;
   static const uint8_t B_G2 = 11;
-
-  // Debug LEDs
-  static const uint8_t LedQ = A0;
-  static const uint8_t LedTrain = A1;
-  static const uint8_t LedAGen = A2;
-  static const uint8_t LedBGen = A3;
 };
 
 class DebouncedActiveLow {
@@ -83,36 +87,45 @@ static const uint8_t DBG_MAN_3 = 6;
 static const uint8_t DBG_MAN_4 = 7;
 static const uint8_t DBG_MAN_5 = 8;
 
-static const int EepromAddrStateQ = 0;
+static const int EepromAddrDirection = 0;
 
-static bool g_stateQ = false;  // false => A green end, true => B green end
+static Direction g_direction = DIR_NONE;  // Current direction state
 static uint8_t g_dbgState = DBG_OFF;
 static uint8_t g_cycleStep = 0;      // for CYCLE mode LED stepping
 static uint32_t g_dbgLast = 0;
 static uint8_t g_flashCount = 6;     // for exit flash sequence (6 = complete/not flashing)
 static bool g_flashOn = false;
 
+// Switch state tracking for change detection
+static bool g_prevSCA = false;
+static bool g_prevSCB = false;
+static bool g_prevSCC = false;
+
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
 static DebouncedActiveLow g_swA;
 static DebouncedActiveLow g_swB;
+static DebouncedActiveLow g_swC;
 static DebouncedActiveLow g_btnDbg;
 
-static bool SerialEnabled() {
-  return digitalRead(Pins::SerialEnable) == LOW;  // jumper to GND enables serial
+
+// EEPROM functions - kept for future use but not currently active
+static void LoadDirection() {
+  uint8_t val = EEPROM.read(EepromAddrDirection);
+  if (val <= DIR_B_TO_A) {
+    g_direction = static_cast<Direction>(val);
+  } else {
+    g_direction = DIR_NONE;
+  }
 }
 
-static void LoadStateQ() {
-  g_stateQ = EEPROM.read(EepromAddrStateQ) != 0;
+static void SaveDirection() {
+  EEPROM.update(EepromAddrDirection, static_cast<uint8_t>(g_direction));
 }
 
-static void SaveStateQ() {
-  EEPROM.update(EepromAddrStateQ, g_stateQ ? 1 : 0);
-}
-
-static void ResetStateQToKnown() {
-  g_stateQ = false;  // known state: A green end
-  EEPROM.update(EepromAddrStateQ, 0);
+static void ResetDirectionToKnown() {
+  g_direction = DIR_NONE;
+  EEPROM.update(EepromAddrDirection, DIR_NONE);
 }
 
 static void WriteLamp(uint8_t pin, bool on) {
@@ -140,16 +153,37 @@ static void SetOneLampByStep(uint8_t step) {
   }
 }
 
-static void ApplyNormalOutputs(bool train, bool scaClosed, bool scbClosed, bool q) {
-  bool aGen = (!train) && (!q);
-  bool bGen = (!train) && (q);
+static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, Direction dir) {
+  // Direction None → both Red
+  if (dir == DIR_NONE) {
+    WriteLamp(Pins::A_R, true);
+    WriteLamp(Pins::A_G1, false);
+    WriteLamp(Pins::A_G2, false);
+    WriteLamp(Pins::B_R, true);
+    WriteLamp(Pins::B_G1, false);
+    WriteLamp(Pins::B_G2, false);
+    return;
+  }
 
-  WriteLamp(Pins::A_R, train || q);
-  WriteLamp(Pins::B_R, train || (!q));
-  WriteLamp(Pins::A_G1, aGen);
-  WriteLamp(Pins::A_G2, aGen && scaClosed);
-  WriteLamp(Pins::B_G1, bGen);
-  WriteLamp(Pins::B_G2, bGen && scbClosed);
+  if (dir == DIR_A_TO_B) {
+    // Signal A can only be green if SCB is closed (thrown)
+    bool aCanBeGreen = scbClosed;
+    WriteLamp(Pins::A_R, !aCanBeGreen);
+    WriteLamp(Pins::A_G1, aCanBeGreen);
+    WriteLamp(Pins::A_G2, aCanBeGreen && scaClosed);
+    WriteLamp(Pins::B_R, true);
+    WriteLamp(Pins::B_G1, false);
+    WriteLamp(Pins::B_G2, false);
+  } else { // DIR_B_TO_A
+    // Signal B requires SCB closed for any green
+    bool bCanBeGreen = scbClosed;
+    WriteLamp(Pins::A_R, true);
+    WriteLamp(Pins::A_G1, false);
+    WriteLamp(Pins::A_G2, false);
+    WriteLamp(Pins::B_R, !bCanBeGreen);
+    WriteLamp(Pins::B_G1, bCanBeGreen);
+    WriteLamp(Pins::B_G2, bCanBeGreen && sccClosed);
+  }
 }
 
 static void AdvanceDebugState() {
@@ -203,33 +237,28 @@ static bool RunExitFlash(uint32_t now) {
   return true;
 }
 
-static void UpdateDebugLeds(bool train, bool q) {
-  bool aGen = (!train) && (!q);
-  bool bGen = (!train) && (q);
-
-  digitalWrite(Pins::LedQ, q ? HIGH : LOW);
-  digitalWrite(Pins::LedTrain, train ? HIGH : LOW);
-  digitalWrite(Pins::LedAGen, aGen ? HIGH : LOW);
-  digitalWrite(Pins::LedBGen, bGen ? HIGH : LOW);
-}
-
-static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool q) {
+#ifdef SERIAL_MONITOR_ENABLED
+static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool sccClosed, Direction dir) {
   static uint32_t last = 0;
-  if (!SerialEnabled()) return;
   if (millis() - last < 1000) return;
   last = millis();
 
   Serial.print("T=");
   Serial.print(train);
-  Serial.print(" Q=");
-  Serial.print(q ? 'B' : 'A');
+  Serial.print(" Dir=");
+  if (dir == DIR_NONE) Serial.print("None");
+  else if (dir == DIR_A_TO_B) Serial.print("A->B");
+  else Serial.print("B->A");
   Serial.print(" SCA=");
   Serial.print(scaClosed);
   Serial.print(" SCB=");
   Serial.print(scbClosed);
+  Serial.print(" SCC=");
+  Serial.print(sccClosed);
   Serial.print(" DBG=");
   Serial.println(g_dbgState);
 }
+#endif
 
 void setup() {
   pinMode(Pins::Debug, INPUT_PULLUP);
@@ -237,19 +266,24 @@ void setup() {
 
   delay(5);
   bool debugHeldAtBoot = (digitalRead(Pins::Debug) == LOW);
-  if (debugHeldAtBoot) ResetStateQToKnown();
-  else LoadStateQ();
-
-  if (SerialEnabled()) {
-    Serial.begin(115200);
-    Serial.println("Signal controller started");
+  if (debugHeldAtBoot) {
+    ResetDirectionToKnown();
   }
+  // EEPROM loading disabled - direction starts as None
+  // else LoadDirection();
+  g_direction = DIR_NONE;
+
+#ifdef SERIAL_MONITOR_ENABLED
+  Serial.begin(115200);
+  Serial.println("Signal controller started");
+#endif
 
   pinMode(Pins::Train, INPUT_PULLUP);
   pinMode(Pins::PBA, INPUT_PULLUP);
   pinMode(Pins::PBB, INPUT_PULLUP);
   pinMode(Pins::SCA, INPUT_PULLUP);
   pinMode(Pins::SCB, INPUT_PULLUP);
+  pinMode(Pins::SCC, INPUT_PULLUP);
 
   pinMode(Pins::A_R, OUTPUT);
   pinMode(Pins::A_G1, OUTPUT);
@@ -258,16 +292,17 @@ void setup() {
   pinMode(Pins::B_G1, OUTPUT);
   pinMode(Pins::B_G2, OUTPUT);
 
-  pinMode(Pins::LedQ, OUTPUT);
-  pinMode(Pins::LedTrain, OUTPUT);
-  pinMode(Pins::LedAGen, OUTPUT);
-  pinMode(Pins::LedBGen, OUTPUT);
-
   g_btnA.Begin(Pins::PBA);
   g_btnB.Begin(Pins::PBB);
   g_swA.Begin(Pins::SCA);
   g_swB.Begin(Pins::SCB);
+  g_swC.Begin(Pins::SCC);
   g_btnDbg.Begin(Pins::Debug);
+
+  // Initialize previous switch states
+  g_prevSCA = g_swA.IsActive(0);
+  g_prevSCB = g_swB.IsActive(0);
+  g_prevSCC = g_swC.IsActive(0);
 }
 
 void loop() {
@@ -284,7 +319,6 @@ void loop() {
   // Handle exit flash sequence (runs after MAN_5 -> OFF transition)
   if (g_dbgState == DBG_OFF && g_flashCount < 6) {
     if (RunExitFlash(now)) {
-      UpdateDebugLeds(train, g_stateQ);
       return;  // still flashing
     }
   }
@@ -294,8 +328,7 @@ void loop() {
     g_dbgState = DBG_OFF;
     g_flashCount = 6;  // skip flash sequence on cancel
     SetAllLamps(false);
-    UpdateDebugLeds(train, g_stateQ);
-    return;  // cancel debug only; do not toggle direction on same press
+    return;  // cancel debug only; do not change direction on same press
   }
 
   // Advance debug state on debug button press
@@ -306,25 +339,45 @@ void loop() {
   // Run debug mode if active
   if (g_dbgState != DBG_OFF) {
     RunDebug(now);
-    UpdateDebugLeds(train, g_stateQ);
     return;
   }
 
-  // Normal operation
-  if (!train) {
-    if (pressedA && g_stateQ != false) {
-      g_stateQ = false;  // Direction A -> B
-      SaveStateQ();
-    } else if (pressedB && g_stateQ != true) {
-      g_stateQ = true;  // Direction B -> A
-      SaveStateQ();
+  // Read switch states
+  bool scaClosed = g_swA.IsActive(DebounceMs);
+  bool scbClosed = g_swB.IsActive(DebounceMs);
+  bool sccClosed = g_swC.IsActive(DebounceMs);
+
+  // Train present forces Direction to None
+  if (train) {
+    g_direction = DIR_NONE;
+  }
+
+  // Check for switch changes - any change forces Direction to None
+  // Only check when direction is already set (not None)
+  if (g_direction != DIR_NONE) {
+    if (scaClosed != g_prevSCA || scbClosed != g_prevSCB || sccClosed != g_prevSCC) {
+      g_direction = DIR_NONE;
     }
   }
 
-  bool scaClosed = g_swA.IsActive(DebounceMs);
-  bool scbClosed = g_swB.IsActive(DebounceMs);
+  // Always update previous states before button handling
+  g_prevSCA = scaClosed;
+  g_prevSCB = scbClosed;
+  g_prevSCC = sccClosed;
 
-  ApplyNormalOutputs(train, scaClosed, scbClosed, g_stateQ);
-  UpdateDebugLeds(train, g_stateQ);
-  PrintStatus(train, scaClosed, scbClosed, g_stateQ);
+  // Normal operation - button presses only work when Direction is None and no train
+  if (!train && g_direction == DIR_NONE) {
+    if (pressedA) {
+      g_direction = DIR_A_TO_B;
+      // SaveDirection();  // EEPROM disabled
+    } else if (pressedB) {
+      g_direction = DIR_B_TO_A;
+      // SaveDirection();  // EEPROM disabled
+    }
+  }
+
+  ApplyNormalOutputs(scaClosed, scbClosed, sccClosed, g_direction);
+#ifdef SERIAL_MONITOR_ENABLED
+  PrintStatus(train, scaClosed, scbClosed, sccClosed, g_direction);
+#endif
 }
