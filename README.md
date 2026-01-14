@@ -72,8 +72,8 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
 | Direction **A → B**, SCB closed, SCA open | OFF | ON | OFF | ON | OFF | OFF |
 | Direction **A → B**, SCB closed, SCA closed | OFF | ON | ON | ON | OFF | OFF |
 | Direction **B → A**, SCB open | ON | OFF | OFF | ON | OFF | OFF |
-| Direction **B → A**, SCB closed, SCC open | ON | OFF | OFF | OFF | ON | OFF |
-| Direction **B → A**, SCB closed, SCC closed | ON | OFF | OFF | OFF | ON | ON |
+| Direction **B → A**, SCB closed, SCC or SCD open | ON | OFF | OFF | OFF | ON | OFF |
+| Direction **B → A**, SCB closed, SCC closed, SCD closed | ON | OFF | OFF | OFF | ON | ON |
 
 ---
 
@@ -156,8 +156,9 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
 | Pushbutton A | D3 | 3 |
 | Pushbutton B | D4 | 4 |
 | Switch A closed | D5 | 5 |
-| Switch B closed | D6 | 6 |
-| Switch B closed | A3 | A3 |
+| Switch B closed | A2 | A2 |
+| Switch C closed | D6 | 6 |
+| Switch D closed | A3 | A3 |
 | Debug button | A4 | A4 |
 | Serial enable jumper | A5 | A5 |
 

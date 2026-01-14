@@ -15,8 +15,9 @@ struct Pins {
   static const uint8_t PBA = 3;  // Pushbutton A
   static const uint8_t PBB = 4;  // Pushbutton B
   static const uint8_t SCA = 5;  // Switch A closed
-  static const uint8_t SCB = 6;  // Switch B closed
-  static const uint8_t SCC = A3; // Switch C closed
+  static const uint8_t SCB = A2; // Switch B closed
+  static const uint8_t SCC = 6;  // Switch C closed
+  static const uint8_t SCD = A3; // Switch D closed
   static const uint8_t Debug = A4;
   static const uint8_t SerialEnable = A5;
 
@@ -100,12 +101,14 @@ static bool g_flashOn = false;
 static bool g_prevSCA = false;
 static bool g_prevSCB = false;
 static bool g_prevSCC = false;
+static bool g_prevSCD = false;
 
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
 static DebouncedActiveLow g_swA;
 static DebouncedActiveLow g_swB;
 static DebouncedActiveLow g_swC;
+static DebouncedActiveLow g_swD;
 static DebouncedActiveLow g_btnDbg;
 
 
@@ -153,7 +156,7 @@ static void SetOneLampByStep(uint8_t step) {
   }
 }
 
-static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, Direction dir) {
+static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, bool scdClosed, Direction dir) {
   // Direction None → both Red
   if (dir == DIR_NONE) {
     WriteLamp(Pins::A_R, true);
@@ -176,13 +179,14 @@ static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, D
     WriteLamp(Pins::B_G2, false);
   } else { // DIR_B_TO_A
     // Signal B requires SCB closed for any green
+    // Green2 requires SCB, SCC, and SCD all closed
     bool bCanBeGreen = scbClosed;
     WriteLamp(Pins::A_R, true);
     WriteLamp(Pins::A_G1, false);
     WriteLamp(Pins::A_G2, false);
     WriteLamp(Pins::B_R, !bCanBeGreen);
     WriteLamp(Pins::B_G1, bCanBeGreen);
-    WriteLamp(Pins::B_G2, bCanBeGreen && sccClosed);
+    WriteLamp(Pins::B_G2, bCanBeGreen && sccClosed && scdClosed);
   }
 }
 
@@ -238,7 +242,7 @@ static bool RunExitFlash(uint32_t now) {
 }
 
 #ifdef SERIAL_MONITOR_ENABLED
-static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool sccClosed, Direction dir) {
+static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool sccClosed, bool scdClosed, Direction dir) {
   static uint32_t last = 0;
   if (millis() - last < 1000) return;
   last = millis();
@@ -255,6 +259,8 @@ static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool sccClos
   Serial.print(scbClosed);
   Serial.print(" SCC=");
   Serial.print(sccClosed);
+  Serial.print(" SCD=");
+  Serial.print(scdClosed);
   Serial.print(" DBG=");
   Serial.println(g_dbgState);
 }
@@ -284,6 +290,7 @@ void setup() {
   pinMode(Pins::SCA, INPUT_PULLUP);
   pinMode(Pins::SCB, INPUT_PULLUP);
   pinMode(Pins::SCC, INPUT_PULLUP);
+  pinMode(Pins::SCD, INPUT_PULLUP);
 
   pinMode(Pins::A_R, OUTPUT);
   pinMode(Pins::A_G1, OUTPUT);
@@ -297,12 +304,14 @@ void setup() {
   g_swA.Begin(Pins::SCA);
   g_swB.Begin(Pins::SCB);
   g_swC.Begin(Pins::SCC);
+  g_swD.Begin(Pins::SCD);
   g_btnDbg.Begin(Pins::Debug);
 
   // Initialize previous switch states
   g_prevSCA = g_swA.IsActive(0);
   g_prevSCB = g_swB.IsActive(0);
   g_prevSCC = g_swC.IsActive(0);
+  g_prevSCD = g_swD.IsActive(0);
 }
 
 void loop() {
@@ -346,6 +355,7 @@ void loop() {
   bool scaClosed = g_swA.IsActive(DebounceMs);
   bool scbClosed = g_swB.IsActive(DebounceMs);
   bool sccClosed = g_swC.IsActive(DebounceMs);
+  bool scdClosed = g_swD.IsActive(DebounceMs);
 
   // Train present forces Direction to None
   if (train) {
@@ -355,7 +365,7 @@ void loop() {
   // Check for switch changes - any change forces Direction to None
   // Only check when direction is already set (not None)
   if (g_direction != DIR_NONE) {
-    if (scaClosed != g_prevSCA || scbClosed != g_prevSCB || sccClosed != g_prevSCC) {
+    if (scaClosed != g_prevSCA || scbClosed != g_prevSCB || sccClosed != g_prevSCC || scdClosed != g_prevSCD) {
       g_direction = DIR_NONE;
     }
   }
@@ -364,9 +374,11 @@ void loop() {
   g_prevSCA = scaClosed;
   g_prevSCB = scbClosed;
   g_prevSCC = sccClosed;
+  g_prevSCD = scdClosed;
 
   // Normal operation - button presses only work when Direction is None and no train
-  if (!train && g_direction == DIR_NONE) {
+  // Additionally, SCB must be closed for either direction to be set
+  if (!train && g_direction == DIR_NONE && scbClosed) {
     if (pressedA) {
       g_direction = DIR_A_TO_B;
       // SaveDirection();  // EEPROM disabled
@@ -376,8 +388,8 @@ void loop() {
     }
   }
 
-  ApplyNormalOutputs(scaClosed, scbClosed, sccClosed, g_direction);
+  ApplyNormalOutputs(scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
 #ifdef SERIAL_MONITOR_ENABLED
-  PrintStatus(train, scaClosed, scbClosed, sccClosed, g_direction);
+  PrintStatus(train, scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
 #endif
 }
