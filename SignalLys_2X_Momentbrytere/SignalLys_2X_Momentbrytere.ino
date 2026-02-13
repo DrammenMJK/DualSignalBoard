@@ -41,7 +41,7 @@ public:
     _changedAt = millis();
   }
 
-  bool PressedEvent(uint32_t debounceMs) {
+  bool PressedEvent(uint32_t debounceMs, const char* debugName = nullptr) {
     bool raw = ReadRaw();
     if (raw != _stable) {
       _stable = raw;
@@ -51,6 +51,19 @@ public:
 
     bool now = _stable;
     bool was = _lastStable;
+
+    // Only print when state actually changes (edge detection moment)
+    if (now != was && debugName != nullptr) {
+      Serial.print("EDGE DETECT ");
+      Serial.print(debugName);
+      Serial.print(": was=");
+      Serial.print(was);
+      Serial.print(" now=");
+      Serial.print(now);
+      Serial.print(" result=");
+      Serial.println((was == true && now == false) ? "PRESS" : "release");
+    }
+
     _lastStable = now;
 
     return (was == true && now == false);  // falling edge = press
@@ -242,27 +255,159 @@ static bool RunExitFlash(uint32_t now) {
 }
 
 #ifdef SERIAL_MONITOR_ENABLED
-static void PrintStatus(bool train, bool scaClosed, bool scbClosed, bool sccClosed, bool scdClosed, Direction dir) {
-  static uint32_t last = 0;
-  if (millis() - last < 1000) return;
-  last = millis();
+// Unified debug state tracking
+struct DebugState {
+  uint8_t pba, pbb, train;
+  uint8_t sca, scb, scc, scd;
+  Direction dir;
+  uint32_t lastPrintTime;
+  bool initialized;
+};
+static DebugState g_dbg = {0, 0, 0, 0, 0, 0, 0, DIR_NONE, 0, false};
 
-  Serial.print("T=");
-  Serial.print(train);
-  Serial.print(" Dir=");
-  if (dir == DIR_NONE) Serial.print("None");
-  else if (dir == DIR_A_TO_B) Serial.print("A->B");
-  else Serial.print("B->A");
-  Serial.print(" SCA=");
-  Serial.print(scaClosed);
-  Serial.print(" SCB=");
-  Serial.print(scbClosed);
-  Serial.print(" SCC=");
-  Serial.print(sccClosed);
-  Serial.print(" SCD=");
-  Serial.print(scdClosed);
-  Serial.print(" DBG=");
-  Serial.println(g_dbgState);
+static void PrintFullState(const char* reason) {
+  Serial.println();
+  Serial.print("=== ");
+  Serial.print(reason);
+  Serial.println(" ===");
+
+  // Raw pin readings (0=LOW/active, 1=HIGH/inactive for active-low inputs)
+  Serial.println("RAW PINS (0=LOW, 1=HIGH):");
+  Serial.print("  Buttons: PBA(D3)=");
+  Serial.print(digitalRead(Pins::PBA));
+  Serial.print("  PBB(D4)=");
+  Serial.println(digitalRead(Pins::PBB));
+
+  Serial.print("  Train:   D2=");
+  Serial.println(digitalRead(Pins::Train));
+
+  Serial.print("  Switches: SCA(D5)=");
+  Serial.print(digitalRead(Pins::SCA));
+  Serial.print("  SCB(A2)=");
+  Serial.print(digitalRead(Pins::SCB));
+  Serial.print("  SCC(D6)=");
+  Serial.print(digitalRead(Pins::SCC));
+  Serial.print("  SCD(A3)=");
+  Serial.println(digitalRead(Pins::SCD));
+
+  // Debounced button states (important for edge detection)
+  Serial.print("DEBOUNCED BUTTONS: PBA=");
+  Serial.print(g_btnA.IsActive(25) ? "PRESSED" : "released");
+  Serial.print("  PBB=");
+  Serial.println(g_btnB.IsActive(25) ? "PRESSED" : "released");
+
+  // Switches (raw is fine, they're stable)
+  Serial.print("SWITCHES: A=");
+  Serial.print(digitalRead(Pins::SCA) == LOW ? "CLOSED" : "open");
+  Serial.print("  B=");
+  Serial.print(digitalRead(Pins::SCB) == LOW ? "CLOSED" : "open");
+  Serial.print("  C=");
+  Serial.print(digitalRead(Pins::SCC) == LOW ? "CLOSED" : "open");
+  Serial.print("  D=");
+  Serial.println(digitalRead(Pins::SCD) == LOW ? "CLOSED" : "open");
+
+  // Current state
+  Serial.println("LOGIC STATE:");
+  Serial.print("  Direction: ");
+  if (g_direction == DIR_NONE) Serial.println("None");
+  else if (g_direction == DIR_A_TO_B) Serial.println("A->B");
+  else Serial.println("B->A");
+
+  Serial.print("  Train present: ");
+  Serial.println(digitalRead(Pins::Train) == LOW ? "YES" : "no");
+
+  // Signal lamp outputs
+  Serial.println("LAMP OUTPUTS:");
+  Serial.print("  Signal A: R=");
+  Serial.print(digitalRead(Pins::A_R) ? "ON" : "off");
+  Serial.print("  G1=");
+  Serial.print(digitalRead(Pins::A_G1) ? "ON" : "off");
+  Serial.print("  G2=");
+  Serial.println(digitalRead(Pins::A_G2) ? "ON" : "off");
+
+  Serial.print("  Signal B: R=");
+  Serial.print(digitalRead(Pins::B_R) ? "ON" : "off");
+  Serial.print("  G1=");
+  Serial.print(digitalRead(Pins::B_G1) ? "ON" : "off");
+  Serial.print("  G2=");
+  Serial.println(digitalRead(Pins::B_G2) ? "ON" : "off");
+  Serial.println();
+}
+
+static void HandleSerialInput() {
+  if (Serial.available() > 0) {
+    char c = Serial.read();
+    if (c == 's' || c == 'S') {
+      PrintFullState("STATUS REQUEST");
+    } else if (c == '?') {
+      Serial.println();
+      Serial.println("Commands: s=status, ?=help");
+    }
+  }
+}
+
+static void DebugCheckAndPrint(bool pressedA, bool pressedB) {
+  HandleSerialInput();
+  uint32_t now = millis();
+
+  // Read current raw states
+  uint8_t pba = digitalRead(Pins::PBA);
+  uint8_t pbb = digitalRead(Pins::PBB);
+  uint8_t train = digitalRead(Pins::Train);
+  uint8_t sca = digitalRead(Pins::SCA);
+  uint8_t scb = digitalRead(Pins::SCB);
+  uint8_t scc = digitalRead(Pins::SCC);
+  uint8_t scd = digitalRead(Pins::SCD);
+
+  // Check for button press events
+  if (pressedA) {
+    PrintFullState("PBA PRESSED");
+    g_dbg.lastPrintTime = now;
+    return;
+  }
+  if (pressedB) {
+    PrintFullState("PBB PRESSED");
+    g_dbg.lastPrintTime = now;
+    return;
+  }
+
+  // Check for direction change
+  if (g_dbg.initialized && g_dbg.dir != g_direction) {
+    PrintFullState("DIRECTION CHANGED");
+    g_dbg.dir = g_direction;
+    g_dbg.lastPrintTime = now;
+    return;
+  }
+
+  // Check for any input state change
+  bool changed = !g_dbg.initialized ||
+                 pba != g_dbg.pba || pbb != g_dbg.pbb ||
+                 train != g_dbg.train ||
+                 sca != g_dbg.sca || scb != g_dbg.scb ||
+                 scc != g_dbg.scc || scd != g_dbg.scd;
+
+  // Print on change or every 60 seconds
+  bool timeout = (now - g_dbg.lastPrintTime) >= 60000;
+
+  if (changed) {
+    PrintFullState("INPUT CHANGED");
+  } else if (timeout) {
+    PrintFullState("PERIODIC (60s)");
+  } else {
+    return;  // No print needed
+  }
+
+  // Update saved state
+  g_dbg.pba = pba;
+  g_dbg.pbb = pbb;
+  g_dbg.train = train;
+  g_dbg.sca = sca;
+  g_dbg.scb = scb;
+  g_dbg.scc = scc;
+  g_dbg.scd = scd;
+  g_dbg.dir = g_direction;
+  g_dbg.lastPrintTime = now;
+  g_dbg.initialized = true;
 }
 #endif
 
@@ -315,15 +460,43 @@ void setup() {
 }
 
 void loop() {
-  const uint32_t DebounceMs = 25;
+  const uint32_t DebounceMs = 5;  // Reduced - hardware RC filter handles debounce
   uint32_t now = millis();
 
   bool train = (digitalRead(Pins::Train) == LOW);
 
-  bool dbgPressed = g_btnDbg.PressedEvent(DebounceMs);
-  bool pressedA = g_btnA.PressedEvent(DebounceMs);
-  bool pressedB = g_btnB.PressedEvent(DebounceMs);
+  // Track raw button state for debug
+#ifdef SERIAL_MONITOR_ENABLED
+  static uint8_t lastRawPBA = 1;
+  static uint8_t lastRawPBB = 1;
+  uint8_t rawPBA = digitalRead(Pins::PBA);
+  uint8_t rawPBB = digitalRead(Pins::PBB);
+  if (rawPBA != lastRawPBA) {
+    Serial.print("*** PBA RAW CHANGED: ");
+    Serial.print(lastRawPBA);
+    Serial.print(" -> ");
+    Serial.println(rawPBA);
+    lastRawPBA = rawPBA;
+  }
+  if (rawPBB != lastRawPBB) {
+    Serial.print("*** PBB RAW CHANGED: ");
+    Serial.print(lastRawPBB);
+    Serial.print(" -> ");
+    Serial.println(rawPBB);
+    lastRawPBB = rawPBB;
+  }
+#endif
+
+  bool dbgPressed = g_btnDbg.PressedEvent(DebounceMs, nullptr);
+  bool pressedA = g_btnA.PressedEvent(DebounceMs, "PBA");
+  bool pressedB = g_btnB.PressedEvent(DebounceMs, "PBB");
   bool anySignalPressed = pressedA || pressedB;
+
+#ifdef SERIAL_MONITOR_ENABLED
+  if (pressedA) Serial.println("*** PressedEvent: PBA = TRUE ***");
+  if (pressedB) Serial.println("*** PressedEvent: PBB = TRUE ***");
+  DebugCheckAndPrint(pressedA, pressedB);
+#endif
 
   // Handle exit flash sequence (runs after MAN_5 -> OFF transition)
   if (g_dbgState == DBG_OFF && g_flashCount < 6) {
@@ -378,18 +551,37 @@ void loop() {
 
   // Normal operation - button presses only work when Direction is None and no train
   // Additionally, SCB must be closed for either direction to be set
+#ifdef SERIAL_MONITOR_ENABLED
+  if (pressedA || pressedB) {
+    Serial.println();
+    Serial.println(">>> BUTTON EVENT <<<");
+    Serial.print("  pressedA=");
+    Serial.print(pressedA);
+    Serial.print("  pressedB=");
+    Serial.println(pressedB);
+    Serial.print("  Condition: !train=");
+    Serial.print(!train);
+    Serial.print("  dir==None=");
+    Serial.print(g_direction == DIR_NONE);
+    Serial.print("  scbClosed=");
+    Serial.println(scbClosed);
+    Serial.print("  ALL CONDITIONS MET: ");
+    Serial.println((!train && g_direction == DIR_NONE && scbClosed) ? "YES" : "NO");
+  }
+#endif
   if (!train && g_direction == DIR_NONE && scbClosed) {
     if (pressedA) {
       g_direction = DIR_A_TO_B;
-      // SaveDirection();  // EEPROM disabled
+#ifdef SERIAL_MONITOR_ENABLED
+      Serial.println("  -> Direction set to A->B");
+#endif
     } else if (pressedB) {
       g_direction = DIR_B_TO_A;
-      // SaveDirection();  // EEPROM disabled
+#ifdef SERIAL_MONITOR_ENABLED
+      Serial.println("  -> Direction set to B->A");
+#endif
     }
   }
 
   ApplyNormalOutputs(scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
-#ifdef SERIAL_MONITOR_ENABLED
-  PrintStatus(train, scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
-#endif
 }

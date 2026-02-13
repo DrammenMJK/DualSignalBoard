@@ -3722,6 +3722,16 @@
 		)
 		(uuid "8ef74d5b-d442-45f7-9699-5dc4a3d79c62")
 	)
+	(text "B"
+		(exclude_from_sim no)
+		(at 189.738 93.218 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "9bbb383f-6122-4f94-ab4e-90e82f7ac1ed")
+	)
 	(text "+12V"
 		(exclude_from_sim no)
 		(at 230.632 65.278 0)
@@ -3732,6 +3742,16 @@
 		)
 		(uuid "a212eee9-92c3-48e9-b9f0-8f94518fae62")
 	)
+	(text "D"
+		(exclude_from_sim no)
+		(at 189.992 95.758 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "b2e10b18-fba0-43e2-9640-421b11d5536a")
+	)
 	(text "Red"
 		(exclude_from_sim no)
 		(at 267.462 72.644 0)
@@ -3741,6 +3761,16 @@
 			)
 		)
 		(uuid "b9f05bc7-9ad5-42de-a569-fd86a6af9369")
+	)
+	(text "C"
+		(exclude_from_sim no)
+		(at 158.242 88.392 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "bc050bac-412c-4266-8ce7-d0e46b9e6940")
 	)
 	(text "Wires to 2nd board"
 		(exclude_from_sim no)
@@ -3771,6 +3801,16 @@
 			)
 		)
 		(uuid "ce29734d-aa3c-4558-a955-d3646e2568d8")
+	)
+	(text "A"
+		(exclude_from_sim no)
+		(at 158.242 85.598 0)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+		)
+		(uuid "d268bf17-cecd-4ae8-b2e5-e46675e28901")
 	)
 	(text "Green 2"
 		(exclude_from_sim no)
@@ -3841,12 +3881,6 @@
 		(diameter 0)
 		(color 0 0 0 0)
 		(uuid "375a30be-81e3-4ab1-a6b5-ae488419d9c7")
-	)
-	(junction
-		(at 109.22 78.74)
-		(diameter 0)
-		(color 0 0 0 0)
-		(uuid "407d132d-3f51-450c-829d-5e5421c758e8")
 	)
 	(junction
 		(at 71.12 121.92)
@@ -4946,6 +4980,26 @@
 	)
 	(wire
 		(pts
+			(xy 83.82 63.5) (xy 83.82 69.85)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "817f685c-6079-48f5-81b9-a776334f09a6")
+	)
+	(wire
+		(pts
+			(xy 83.82 63.5) (xy 109.22 63.5)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "8256a522-bacc-48b5-b81f-d9514c7f829a")
+	)
+	(wire
+		(pts
 			(xy 121.92 140.97) (xy 265.43 140.97)
 		)
 		(stroke
@@ -5536,16 +5590,6 @@
 	)
 	(wire
 		(pts
-			(xy 102.87 78.74) (xy 109.22 78.74)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "d0e98758-08ab-42e3-9bde-58974981168c")
-	)
-	(wire
-		(pts
 			(xy 137.16 96.52) (xy 137.16 124.46)
 		)
 		(stroke
@@ -5683,16 +5727,6 @@
 			(type default)
 		)
 		(uuid "e48e5d38-09d6-4aa3-98a6-3d8b0a72dbd1")
-	)
-	(wire
-		(pts
-			(xy 87.63 63.5) (xy 109.22 63.5)
-		)
-		(stroke
-			(width 0)
-			(type default)
-		)
-		(uuid "e55b2617-ae8e-4e53-9ae4-63b7a9c0935a")
 	)
 	(wire
 		(pts
@@ -7649,79 +7683,6 @@
 			(project "DualSignalKontroll"
 				(path "/f90bb1a2-1a22-420b-b2f2-f9513faf4f93"
 					(reference "U7")
-					(unit 1)
-				)
-			)
-		)
-	)
-	(symbol
-		(lib_id "Jumper:Jumper_3_Bridged12")
-		(at 87.63 69.85 270)
-		(mirror x)
-		(unit 1)
-		(exclude_from_sim no)
-		(in_bom no)
-		(on_board yes)
-		(dnp no)
-		(uuid "5a8a2320-f5b8-456c-8fc8-bb9cc368aad3")
-		(property "Reference" "JP5"
-			(at 90.17 68.5799 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Value" "Direct Conn TrackDetector"
-			(at 90.17 71.1199 90)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(justify left)
-			)
-		)
-		(property "Footprint" ""
-			(at 87.63 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Datasheet" "~"
-			(at 87.63 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(property "Description" "Jumper, 3-pole, pins 1+2 closed/bridged"
-			(at 87.63 69.85 0)
-			(effects
-				(font
-					(size 1.27 1.27)
-				)
-				(hide yes)
-			)
-		)
-		(pin "2"
-			(uuid "4f37cf82-8a6b-4edc-8034-227e519a1f60")
-		)
-		(pin "3"
-			(uuid "291137c9-b406-43c8-be81-8d8cdbc22981")
-		)
-		(pin "1"
-			(uuid "c684b93f-24b0-4daa-bba8-07dbc2a64f53")
-		)
-		(instances
-			(project ""
-				(path "/f90bb1a2-1a22-420b-b2f2-f9513faf4f93"
-					(reference "JP5")
 					(unit 1)
 				)
 			)
