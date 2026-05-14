@@ -463,7 +463,7 @@ void loop() {
   const uint32_t DebounceMs = 5;  // Reduced - hardware RC filter handles debounce
   uint32_t now = millis();
 
-  bool train = (digitalRead(Pins::Train) == LOW);
+  bool train = (digitalRead(Pins::Train) == HIGH);
 
   // Track raw button state for debug
 #ifdef SERIAL_MONITOR_ENABLED
