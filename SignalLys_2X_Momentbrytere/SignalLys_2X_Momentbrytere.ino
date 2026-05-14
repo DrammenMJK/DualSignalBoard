@@ -126,6 +126,10 @@ static bool g_trainFiltered = false;         // Filtered train state (after debo
 static uint32_t g_trainDetectedAt = 0;       // When filtered state first went HIGH
 static const uint32_t TrainDelayMs = 1000;   // 2 second delay before taking effect
 
+static const uint32_t FadeMs      = 1000;
+static const uint16_t PwmPeriodUs = 1000;
+static const uint8_t  FadeSteps   = 60;
+
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
 static DebouncedActiveLow g_swA;
@@ -179,6 +183,90 @@ static void SetOneLampByStep(uint8_t step) {
   }
 }
 
+static bool IsPwmPin(uint8_t pin) {
+  return pin == 3 || pin == 5 || pin == 6 || pin == 9 || pin == 10 || pin == 11;
+}
+
+static void FadeGroup(uint8_t* pins, uint8_t count, bool fadeIn, uint32_t totalMs) {
+  if (count == 0) return;
+  uint32_t stepMs = totalMs / FadeSteps;
+  for (uint8_t i = 0; i < FadeSteps; i++) {
+    uint8_t duty = fadeIn
+      ? (uint8_t)((uint32_t)i * 255 / (FadeSteps - 1))
+      : (uint8_t)(255 - (uint32_t)i * 255 / (FadeSteps - 1));
+    for (uint8_t j = 0; j < count; j++)
+      if (IsPwmPin(pins[j])) analogWrite(pins[j], duty);
+    uint32_t deadline = millis() + stepMs;
+    uint16_t highUs = (uint32_t)duty * PwmPeriodUs / 255;
+    uint16_t lowUs  = PwmPeriodUs - highUs;
+    while (millis() < deadline) {
+      if (highUs > 0) {
+        for (uint8_t j = 0; j < count; j++)
+          if (!IsPwmPin(pins[j])) digitalWrite(pins[j], HIGH);
+        delayMicroseconds(highUs);
+      }
+      if (lowUs > 0) {
+        for (uint8_t j = 0; j < count; j++)
+          if (!IsPwmPin(pins[j])) digitalWrite(pins[j], LOW);
+        delayMicroseconds(lowUs);
+      }
+    }
+  }
+  for (uint8_t j = 0; j < count; j++)
+    digitalWrite(pins[j], fadeIn ? HIGH : LOW);
+}
+
+// Simultaneous crossfade: offPins fade out while onPins fade in.
+// Both groups share a 1 ms software-PWM period (edge-aligned).
+static void FadeGroupPair(uint8_t* offPins, uint8_t offCount,
+                           uint8_t* onPins,  uint8_t onCount,
+                           uint32_t totalMs) {
+  uint32_t stepMs = totalMs / FadeSteps;
+  for (uint8_t i = 0; i < FadeSteps; i++) {
+    uint8_t offDuty = (uint8_t)(255 - (uint32_t)i * 255 / (FadeSteps - 1));
+    uint8_t onDuty  = (uint8_t)((uint32_t)i * 255 / (FadeSteps - 1));
+    for (uint8_t j = 0; j < offCount; j++)
+      if (IsPwmPin(offPins[j])) analogWrite(offPins[j], offDuty);
+    for (uint8_t j = 0; j < onCount; j++)
+      if (IsPwmPin(onPins[j])) analogWrite(onPins[j], onDuty);
+    uint32_t deadline = millis() + stepMs;
+    uint16_t offHigh = (uint32_t)offDuty * PwmPeriodUs / 255;
+    uint16_t onHigh  = (uint32_t)onDuty  * PwmPeriodUs / 255;
+    while (millis() < deadline) {
+      if (offHigh > 0)
+        for (uint8_t j = 0; j < offCount; j++)
+          if (!IsPwmPin(offPins[j])) digitalWrite(offPins[j], HIGH);
+      if (onHigh > 0)
+        for (uint8_t j = 0; j < onCount; j++)
+          if (!IsPwmPin(onPins[j])) digitalWrite(onPins[j], HIGH);
+      if (offHigh >= onHigh) {
+        if (onHigh > 0) delayMicroseconds(onHigh);
+        for (uint8_t j = 0; j < onCount; j++)
+          if (!IsPwmPin(onPins[j])) digitalWrite(onPins[j], LOW);
+        if (offHigh > onHigh) delayMicroseconds(offHigh - onHigh);
+        for (uint8_t j = 0; j < offCount; j++)
+          if (!IsPwmPin(offPins[j])) digitalWrite(offPins[j], LOW);
+        if (PwmPeriodUs > offHigh) delayMicroseconds(PwmPeriodUs - offHigh);
+      } else {
+        if (offHigh > 0) delayMicroseconds(offHigh);
+        for (uint8_t j = 0; j < offCount; j++)
+          if (!IsPwmPin(offPins[j])) digitalWrite(offPins[j], LOW);
+        delayMicroseconds(onHigh - offHigh);
+        for (uint8_t j = 0; j < onCount; j++)
+          if (!IsPwmPin(onPins[j])) digitalWrite(onPins[j], LOW);
+        if (PwmPeriodUs > onHigh) delayMicroseconds(PwmPeriodUs - onHigh);
+      }
+    }
+  }
+  for (uint8_t j = 0; j < offCount; j++) digitalWrite(offPins[j], LOW);
+  for (uint8_t j = 0; j < onCount; j++)  digitalWrite(onPins[j],  HIGH);
+}
+
+static const uint8_t LampPins[6] = {
+  Pins::A_R, Pins::A_G1, Pins::A_G2,
+  Pins::B_R, Pins::B_G1, Pins::B_G2
+};
+
 static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, bool scdClosed, Direction dir) {
   // Direction None → both Red
   if (dir == DIR_NONE) {
@@ -210,6 +298,51 @@ static void ApplyNormalOutputs(bool scaClosed, bool scbClosed, bool sccClosed, b
     WriteLamp(Pins::B_R, !bCanBeGreen);
     WriteLamp(Pins::B_G1, bCanBeGreen);
     WriteLamp(Pins::B_G2, bCanBeGreen && sccClosed && scdClosed);
+  }
+}
+
+static void ApplyNormalOutputsSlowly(bool scaClosed, bool scbClosed, bool sccClosed, bool scdClosed, Direction dir) {
+  bool desired[6];
+  if (dir == DIR_NONE) {
+    desired[0] = true;  desired[1] = false; desired[2] = false;
+    desired[3] = true;  desired[4] = false; desired[5] = false;
+  } else if (dir == DIR_A_TO_B) {
+    bool aGreen = scbClosed;
+    desired[0] = !aGreen;
+    desired[1] = aGreen;
+    desired[2] = aGreen && scaClosed;
+    desired[3] = true;  desired[4] = false; desired[5] = false;
+  } else {
+    bool bGreen = scbClosed;
+    desired[0] = true;  desired[1] = false; desired[2] = false;
+    desired[3] = !bGreen;
+    desired[4] = bGreen;
+    desired[5] = bGreen && sccClosed && scdClosed;
+  }
+
+  uint8_t toOff[6]; uint8_t offCount = 0;
+  uint8_t toOn[6];  uint8_t onCount  = 0;
+  for (uint8_t i = 0; i < 6; i++) {
+    bool cur = (digitalRead(LampPins[i]) == HIGH);
+    if (cur && !desired[i])  toOff[offCount++] = LampPins[i];
+    if (!cur && desired[i])  toOn[onCount++]   = LampPins[i];
+  }
+  if (offCount == 0 && onCount == 0) return;
+
+  bool aG1On = false, aG2On = false, bG1On = false, bG2On = false;
+  for (uint8_t i = 0; i < onCount; i++) {
+    if (toOn[i] == Pins::A_G1) aG1On = true;
+    if (toOn[i] == Pins::A_G2) aG2On = true;
+    if (toOn[i] == Pins::B_G1) bG1On = true;
+    if (toOn[i] == Pins::B_G2) bG2On = true;
+  }
+  bool twoGreens = (aG1On && aG2On) || (bG1On && bG2On);
+
+  if (twoGreens) {
+    FadeGroupPair(toOff, offCount, toOn, onCount, FadeMs);
+  } else {
+    FadeGroup(toOff, offCount, false, FadeMs);
+    FadeGroup(toOn,  onCount,  true,  FadeMs);
   }
 }
 
@@ -629,5 +762,5 @@ void loop() {
     }
   }
 
-  ApplyNormalOutputs(scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
+  ApplyNormalOutputsSlowly(scaClosed, scbClosed, sccClosed, scdClosed, g_direction);
 }
