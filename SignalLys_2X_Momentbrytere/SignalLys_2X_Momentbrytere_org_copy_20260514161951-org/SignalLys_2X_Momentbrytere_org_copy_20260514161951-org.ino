@@ -124,7 +124,7 @@ static const int32_t TrainHighThresh = 12;   // 60% - must exceed to go HIGH
 static const int32_t TrainLowThresh = 8;     // 40% - must drop below to go LOW
 static bool g_trainFiltered = false;         // Filtered train state (after debounce)
 static uint32_t g_trainDetectedAt = 0;       // When filtered state first went HIGH
-static const uint32_t TrainDelayMs = 1000;   // 2 second delay before taking effect
+static const uint32_t TrainDelayMs = 2000;   // 2 second delay before taking effect
 
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
@@ -324,9 +324,7 @@ static void PrintFullState(const char* reason) {
   else Serial.println("B->A");
 
   Serial.print("  Train present: ");
-  Serial.println(digitalRead(Pins::Train) == HIGH ? "YES (raw)" : "no (raw)");
-  Serial.print("Train accumulated : ");
-  Serial.println(g_trainAccum);
+  Serial.println(digitalRead(Pins::Train) == LOW ? "YES" : "no");
 
   // Signal lamp outputs
   Serial.println("LAMP OUTPUTS:");
