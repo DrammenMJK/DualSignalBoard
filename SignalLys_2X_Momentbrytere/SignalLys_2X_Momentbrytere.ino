@@ -116,6 +116,11 @@ static bool g_prevSCB = false;
 static bool g_prevSCC = false;
 static bool g_prevSCD = false;
 
+// Train detection delay
+static bool g_trainRaw = false;            // Raw train detection state
+static uint32_t g_trainDetectedAt = 0;     // When train was first detected
+static const uint32_t TrainDelayMs = 2000; // 2 second delay
+
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
 static DebouncedActiveLow g_swA;
@@ -463,7 +468,16 @@ void loop() {
   const uint32_t DebounceMs = 5;  // Reduced - hardware RC filter handles debounce
   uint32_t now = millis();
 
-  bool train = (digitalRead(Pins::Train) == HIGH);
+  bool trainRaw = (digitalRead(Pins::Train) == HIGH);
+
+  // Track when train is first detected
+  if (trainRaw && !g_trainRaw) {
+    g_trainDetectedAt = now;  // Just detected - start the timer
+  }
+  g_trainRaw = trainRaw;
+
+  // Train is only "present" for logic after 2 seconds of continuous detection
+  bool train = trainRaw && (now - g_trainDetectedAt >= TrainDelayMs);
 
   // Track raw button state for debug
 #ifdef SERIAL_MONITOR_ENABLED

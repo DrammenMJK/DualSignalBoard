@@ -30,7 +30,9 @@ Direction **None** is the default state.
 | SCA | **Level-based** | LOW (Closed) |
 | SCB | **Level-based** | LOW (Closed) |
 | SCC | **Level-based** | LOW (Closed) |
-| Train | **Level-based** | LOW (Train present) |
+| Train | **Level-based** | HIGH (Train present) |
+
+**Note:** The Train input is active HIGH (unlike other inputs which are active LOW). Additionally, there is a **2-second delay** before train detection takes effect. The train must be continuously detected for 2 seconds before the signals are forced to red. If the train signal disappears before 2 seconds, the timer resets.
 
 ---
 
@@ -146,7 +148,7 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
 - LED series resistor: **3.3 kΩ**
 - Typical LED current: **~2–3 mA**
 - Arduino side: `INPUT_PULLUP`
-- Logic level: **LOW = active**
+- Logic level: **LOW = active** (except Train input which is **HIGH = active**)
 
 ### Input Functions and Pins
 
@@ -231,7 +233,7 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
   Both signals are Red
 - Startup state:
   - Direction None
-- Train present:
+- Train present (after 2-second delay):
   - Direction None
 - Pushbutton A or B:
   - Sets direction only if Direction is None
@@ -241,8 +243,8 @@ If any switch changes, then Direction is None thereafter. It does NOT change bac
 - Switch B and C closed:
   - Both Greens for B is on.
 
-- When a Train is present, both signals go Red.
-- When train is no more present, signals stay Red.
+- When a Train is present for 2 continuous seconds, both signals go Red.
+- When train is no longer present, signals stay Red (direction remains None).
 
 ---
 
