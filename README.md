@@ -32,7 +32,12 @@ Direction **None** is the default state.
 | SCC | **Level-based** | LOW (Closed) |
 | Train | **Level-based** | HIGH (Train present) |
 
-**Note:** The Train input is active HIGH (unlike other inputs which are active LOW). Additionally, there is a **2-second delay** before train detection takes effect. The train must be continuously detected for 2 seconds before the signals are forced to red. If the train signal disappears before 2 seconds, the timer resets.
+**Note:** The Train input is active HIGH (unlike other inputs which are active LOW). The train detection includes:
+1. **IIR filter with hysteresis (20ms window)** - A leaky integrator filters the raw signal. Schmitt trigger thresholds prevent oscillation:
+   - Goes HIGH when accumulator exceeds 60% (12ms)
+   - Goes LOW when accumulator drops below 40% (8ms)
+   - This ignores brief glitches and noisy signals like `0 1 0 1 0 1`
+2. **2-second delay** - After the filtered signal goes HIGH, there is an additional 2-second delay before the signals are forced to red. If the filtered signal goes LOW before 2 seconds, the timer resets.
 
 ---
 

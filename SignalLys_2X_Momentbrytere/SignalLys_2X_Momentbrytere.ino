@@ -116,10 +116,15 @@ static bool g_prevSCB = false;
 static bool g_prevSCC = false;
 static bool g_prevSCD = false;
 
-// Train detection delay
-static bool g_trainRaw = false;            // Raw train detection state
-static uint32_t g_trainDetectedAt = 0;     // When train was first detected
-static const uint32_t TrainDelayMs = 2000; // 2 second delay
+// Train detection - IIR filter with hysteresis (Schmitt trigger) + delay
+static int32_t g_trainAccum = 0;             // Accumulated "HIGH time" in ms
+static uint32_t g_trainLastSample = 0;       // Last sample timestamp
+static const int32_t TrainFilterMs = 20;     // Filter window ~20ms
+static const int32_t TrainHighThresh = 12;   // 60% - must exceed to go HIGH
+static const int32_t TrainLowThresh = 8;     // 40% - must drop below to go LOW
+static bool g_trainFiltered = false;         // Filtered train state (after debounce)
+static uint32_t g_trainDetectedAt = 0;       // When filtered state first went HIGH
+static const uint32_t TrainDelayMs = 2000;   // 2 second delay before taking effect
 
 static DebouncedActiveLow g_btnA;
 static DebouncedActiveLow g_btnB;
@@ -462,22 +467,47 @@ void setup() {
   g_prevSCB = g_swB.IsActive(0);
   g_prevSCC = g_swC.IsActive(0);
   g_prevSCD = g_swD.IsActive(0);
+
+  // Initialize train filter timestamp
+  g_trainLastSample = millis();
 }
 
 void loop() {
   const uint32_t DebounceMs = 5;  // Reduced - hardware RC filter handles debounce
   uint32_t now = millis();
 
-  bool trainRaw = (digitalRead(Pins::Train) == HIGH);
+  // Train detection with IIR filter (leaky integrator) for debounce
+  bool trainRawPin = (digitalRead(Pins::Train) == HIGH);
+  uint32_t elapsed = now - g_trainLastSample;
+  g_trainLastSample = now;
 
-  // Track when train is first detected
-  if (trainRaw && !g_trainRaw) {
-    g_trainDetectedAt = now;  // Just detected - start the timer
+  // Leaky integrator: accumulate HIGH time, drain LOW time
+  if (trainRawPin) {
+    g_trainAccum += elapsed;
+    if (g_trainAccum > TrainFilterMs) g_trainAccum = TrainFilterMs;
+  } else {
+    g_trainAccum -= elapsed;
+    if (g_trainAccum < 0) g_trainAccum = 0;
   }
-  g_trainRaw = trainRaw;
 
-  // Train is only "present" for logic after 2 seconds of continuous detection
-  bool train = trainRaw && (now - g_trainDetectedAt >= TrainDelayMs);
+  // Schmitt trigger: hysteresis to prevent oscillation
+  bool trainFiltered;
+  if (g_trainFiltered) {
+    // Currently HIGH - must drop below 40% to go LOW
+    trainFiltered = (g_trainAccum >= TrainLowThresh);
+  } else {
+    // Currently LOW - must exceed 60% to go HIGH
+    trainFiltered = (g_trainAccum > TrainHighThresh);
+  }
+
+  // Track when filtered state first goes HIGH (start 2-second delay timer)
+  if (trainFiltered && !g_trainFiltered) {
+    g_trainDetectedAt = now;
+  }
+  g_trainFiltered = trainFiltered;
+
+  // Train is only "present" for logic after 2 seconds of continuous filtered detection
+  bool train = g_trainFiltered && (now - g_trainDetectedAt >= TrainDelayMs);
 
   // Track raw button state for debug
 #ifdef SERIAL_MONITOR_ENABLED
