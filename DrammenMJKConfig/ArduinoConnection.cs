@@ -71,7 +71,8 @@ sealed class ArduinoConnection : IDisposable
             try
             {
                 string line = _port.ReadLine().TrimEnd('\r', '\n');
-                if (_capturing)
+                // Lines starting with '!' are status messages — always print, never queue.
+                if (_capturing && !line.StartsWith('!'))
                     _captureQueue.Enqueue(line);
                 else
                     Console.WriteLine($"\r[A] {line}"); // \r clears any partial prompt

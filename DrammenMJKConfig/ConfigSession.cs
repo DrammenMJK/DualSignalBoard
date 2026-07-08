@@ -47,8 +47,9 @@ static class ConfigSession
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 1: Motor Scan ---");
-        Console.WriteLine("Phase A — finds the Dreieskive motor (the one with no feedback switches).");
-        Console.WriteLine("Phase B — discovers Pens motors by watching which feedback switches change.");
+        Console.WriteLine("Scans all motor pairs in order. For each motor:");
+        Console.WriteLine("  Feedback changes   → Pens motor   (confirm + Rett/Avvik polarity)");
+        Console.WriteLine("  Timeout, no change → Dreieskive   (confirm + CW/CCW polarity)");
         Console.WriteLine();
         Console.WriteLine("Keys during scan:");
         Console.WriteLine("  Y — Correct / confirm");

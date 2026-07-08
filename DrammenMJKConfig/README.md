@@ -57,12 +57,9 @@ or again whenever the hardware changes.
 
 ### Command 1 — Motor scan
 
-Discovers all switch motors automatically.
-
-- **Phase A**: cycles each MCP23017 output to find the Dreieskive motor (the one with no
-  feedback switches).
-- **Phase B**: discovers Pens motors by watching which feedback inputs change while
-  each motor runs.
+Discovers all switch motors in a single scan. Each motor pair is driven in turn:
+- **Feedback changes** → Pens motor — operator confirms and sets Rett/Avvik polarity.
+- **Timeout, no feedback change** → Dreieskive — operator confirms and sets CW/CCW polarity.
 
 | Key | Action |
 |-----|--------|
