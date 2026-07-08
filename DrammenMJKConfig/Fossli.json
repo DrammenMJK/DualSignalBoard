@@ -1,0 +1,138 @@
+{
+  "site": "Fossli",
+
+  // ============================================================
+  // LED routing matrix for Fossli station.
+  //
+  // Layout summary:
+  //
+  //   LEFT (from blocks 41 and 42 via Vallekilen):
+  //
+  //     41 ─┐
+  //          B ─── C(Rett)  ─────────────── block 1 ─────────────── G(Avvik) ─┐
+  //     42 ─┘      C(Avvik) ─ D(Rett)  ─── block 2 ─────────────── F(Avvik) ─┤─ H(Rett) ─ 21
+  //                             D(Avvik) ── block 3 ─── E(Avvik) ──────────────┘
+  //                                               └───── E(Rett) ─── 31 ─── Dreieskive
+  //
+  //   RIGHT (from block 21):
+  //     21 → H (Rett: yard  / Avvik: I → 22/23)
+  //          G (Rett: past  / Avvik: block 1 right end)
+  //          F (Rett: past  / Avvik: block 2 right end)
+  //          E (Avvik: block 3 right end  /  Rett: exit block 3 → 31)
+  //
+  //   F_Avvik and E_Avvik share one physical LED on the panel.
+  //
+  // Block connectivity:
+  //   Left → right:  41/42 → block 1/2/3
+  //                  block 1/2 → block 21
+  //                  block 3   → block 21  OR  block 31
+  //   Right → left:  21 → block 1/2/3, block 22, block 23
+  //                  31 → block 3
+  //                  22/23 → block 21 only
+  //                  block 1/2/3 → block 41, block 42
+  //
+  // Each LED condition covers ONE SECTION — from one block to the immediately
+  // adjacent block (through one switch). Full routes are read by looking
+  // at all lit LEDs together.
+  // ============================================================
+
+  "routing": {
+
+    // ── LEFT SIDE: approach from blocks 41 / 42 via Vallekilen ───────────────
+
+    // B_Rett: block 41 connected to station track.
+    "B_Rett": [
+      { "rett": ["B"] }
+    ],
+
+    // B_Avvik: block 42 connected to station track.
+    "B_Avvik": [
+      { "avvik": ["B"] }
+    ],
+
+    // C_Rett: C directs left approach into block 1.
+    // B position does not matter — both 41 and 42 reach C via B.
+    "C_Rett": [
+      { "rett": ["C"] }
+    ],
+
+    // C_Avvik: C directs left approach toward D (blocks 2 or 3).
+    "C_Avvik": [
+      { "avvik": ["C"] }
+    ],
+
+    // D_Rett: D directs the C_Avvik branch into block 2.
+    // C=Avvik is D's direct upstream prerequisite.
+    "D_Rett": [
+      { "rett": ["D"], "avvik": ["C"] }
+    ],
+
+    // D_Avvik: D directs the C_Avvik branch into block 3.
+    "D_Avvik": [
+      { "avvik": ["C", "D"] }
+    ],
+
+    // ── RIGHT SIDE: approach from block 21 ─────────────────────────────────
+
+    // H_Rett: block 21 connected to the yard AND a valid route exists.
+    // E=Rett cuts off the path from block 21 when G and F are also Rett
+    // (E_Rett connects block 3 to block 31, not the F-side approach).
+    // Three conditions, one per reachable block from 21.
+    "H_Rett": [
+      { "rett": ["H"],           "avvik": ["G"] },  // 21 → block 1
+      { "rett": ["H", "G"],      "avvik": ["F"] },  // 21 → block 2
+      { "rett": ["H", "G", "F"], "avvik": ["E"] }   // 21 → block 3
+    ],
+
+    // H_Avvik: block 21 directed toward I / blocks 22 and 23.
+    // (Default 1-to-1 would suffice, but listed explicitly for completeness.)
+    "H_Avvik": [
+      { "avvik": ["H"] }
+    ],
+
+    // I_Rett: route from block 21 to block 22.
+    // H=Avvik is I's direct upstream prerequisite.
+    "I_Rett": [
+      { "rett": ["I"], "avvik": ["H"] }
+    ],
+
+    // I_Avvik: route from block 21 to block 23.
+    "I_Avvik": [
+      { "avvik": ["H", "I"] }
+    ],
+
+    // G_Rett: G is in the active path from block 21 toward block 2 or block 3.
+    // Two conditions, one per reachable block. Dead-end case (F=Rett, E=Rett) excluded.
+    "G_Rett": [
+      { "rett": ["H", "G", "F"], "avvik": ["E"] },  // 21 → block 3
+      { "rett": ["H", "G"],      "avvik": ["F"] }   // 21 → block 2
+    ],
+
+    // G_Avvik: G directs the H_Rett branch into block 1.
+    "G_Avvik": [
+      { "rett": ["H"], "avvik": ["G"] }
+    ],
+
+    // F_Rett: F directs the G_Rett branch toward E (block 3).
+    // Only valid when E=Avvik — E=Rett would create a dead end from block 21.
+    "F_Rett": [
+      { "rett": ["H", "G", "F"], "avvik": ["E"] }   // 21 → block 3
+    ],
+
+    // F_Avvik: F directs the G_Rett branch into block 2.
+    // Drives the shared F_Avvik / E_Avvik physical LED.
+    "F_Avvik": [
+      { "rett": ["H", "G"], "avvik": ["F"] }         // 21 → block 2
+    ],
+
+    // E_Rett: block 3 connected to block 31 / Dreieskive.
+    // E is at the opposite end of block 3 from D — no C/D prerequisite.
+    "E_Rett": [
+      { "rett": ["E"] }
+    ],
+
+    // E_Avvik: SUPPRESSED. Shares the physical LED with F_Avvik above.
+    // The shared LED is driven only by F_Avvik conditions.
+    "E_Avvik": []
+  }
+}
