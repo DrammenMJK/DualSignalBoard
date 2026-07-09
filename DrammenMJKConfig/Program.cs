@@ -50,6 +50,9 @@ catch (Exception ex)
 // Arduino resets when the serial port opens (CH340 DTR line).
 Console.WriteLine("Waiting for Arduino to initialise...");
 Thread.Sleep(2000);
+arduino.Send('S');   // request EEPROM status -- response arrives via ! lines
+Thread.Sleep(400);   // allow all status lines to arrive before showing menu
+Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();
 
@@ -73,6 +76,7 @@ while (true)
             VerifySession.Run(arduino);
             break;
         case 'Q':
+            arduino.Send('Q');
             Console.WriteLine("Goodbye.");
             return;
         default:

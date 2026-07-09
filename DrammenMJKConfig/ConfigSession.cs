@@ -4,6 +4,7 @@ namespace DrammenMJKConfig;
 
 static class ConfigSession
 {
+    const char Escape = (char)27;
     public static void Run(ArduinoConnection arduino)
     {
         Console.WriteLine();
@@ -11,11 +12,11 @@ static class ConfigSession
         arduino.Send('C');
         Thread.Sleep(200); // allow Arduino banner to arrive before our menu
         Console.WriteLine();
-        PrintMenu();
 
         while (true)
         {
-            Console.Write("Config> ");
+            Console.WriteLine("Config> ");
+            PrintMenu();
             char cmd = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
             Console.WriteLine(cmd);
 
@@ -28,13 +29,13 @@ static class ConfigSession
                 case 'D': DreieskiveSwitch(arduino); break;
                 case '4': RoutingMatrix(arduino);    break;
                 case 'R': ResetConfig(arduino);      break;
+                case Escape:
                 case 'Q':
                     arduino.Send('Q');
                     Console.WriteLine("Exiting config mode.");
                     Console.WriteLine();
                     return;
                 default:
-                    PrintMenu();
                     break;
             }
         }
@@ -47,19 +48,19 @@ static class ConfigSession
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 1: Motor Scan ---");
-        Console.WriteLine("Scans all motor pairs in order. For each motor:");
-        Console.WriteLine("  Feedback changes   → Pens motor   (confirm + Rett/Avvik polarity)");
-        Console.WriteLine("  Timeout, no change → Dreieskive   (confirm + CW/CCW polarity)");
+        Console.WriteLine("Scans all motor pairs in order. Watch the layout to see what moves.");
+        Console.WriteLine("  Feedback detected → type B-I to say which Pens moved, then R or A");
+        Console.WriteLine("  Timeout, nothing  → type S to mark as Dreieskive, then 1 or 2");
         Console.WriteLine();
         Console.WriteLine("Keys during scan:");
-        Console.WriteLine("  Y — Correct / confirm");
-        Console.WriteLine("  N — Skip to next motor");
-        Console.WriteLine("  R — Pens is currently at Rett");
-        Console.WriteLine("  A — Pens is currently at Avvik");
-        Console.WriteLine("  1 — '01' bit pattern is CW  (Dreieskive polarity)");
-        Console.WriteLine("  2 — '10' bit pattern is CW  (Dreieskive polarity)");
-        Console.WriteLine("  X — Emergency stop all motors");
-        Console.WriteLine("  Q — Finished, return to config menu");
+        Console.WriteLine("  B-I — identify which Pens just moved");
+        Console.WriteLine("  0   — skip this pair");
+        Console.WriteLine("  R   — Pens is now at Rett");
+        Console.WriteLine("  A   — Pens is now at Avvik");
+        Console.WriteLine("  1   — '01' bit pattern is CW  (Dreieskive polarity)");
+        Console.WriteLine("  2   — '10' bit pattern is CW  (Dreieskive polarity)");
+        Console.WriteLine("  X   — Emergency stop all motors");
+        Console.WriteLine("  Esc — Finished, return to config menu");
         Console.WriteLine();
         Prompt("Press Enter to begin motor scan...");
 
@@ -74,16 +75,11 @@ static class ConfigSession
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 2: Manual Switch Mapping ---");
-        Console.WriteLine("Move ALL manual panel switches to the Rett position, then press Enter.");
-        Prompt();
-
-        Console.WriteLine("For each Pens:");
-        Console.WriteLine("  Enter B–I to select a Pens to configure.");
-        Console.WriteLine("  Flip its switch to Avvik and back to Rett when Arduino prompts.");
-        Console.WriteLine("  Y = correct switch detected   N = retry");
-        Console.WriteLine("  Y/N during motor cycle to confirm which Pens moves.");
-        Console.WriteLine("  R = Rett / A = Avvik to set polarity.");
-        Console.WriteLine("  Q = finished.");
+        Console.WriteLine("The Arduino shows which Pens are still unmapped.");
+        Console.WriteLine("Type the letter for the Pens you want to map; it drives to Rett,");
+        Console.WriteLine("then prompts you to flip its panel switch to Avvik and back.");
+        Console.WriteLine("Type the same letter again to re-map an already-mapped Pens.");
+        Console.WriteLine("Esc when finished.");
         Console.WriteLine();
 
         arduino.Send('2');
@@ -97,13 +93,17 @@ static class ConfigSession
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 3: LED Mapping ---");
-        Console.WriteLine("All Penser should be at their Rett position (run Command 2 first).");
+        Console.WriteLine("Maps each Pens position (Rett and Avvik) to a physical LED index (0-15).");
+        Console.WriteLine("The Arduino shows which Pens and LED indices are still unassigned.");
+        Console.WriteLine("Type a Pens letter, then step through LEDs with N/P until the correct");
+        Console.WriteLine("physical LED lights up, then press S to save. Type the letter again to re-map.");
         Console.WriteLine();
         Console.WriteLine("  B–I — select Pens to configure");
-        Console.WriteLine("  N   — next LED");
-        Console.WriteLine("  P   — previous LED");
-        Console.WriteLine("  S   — save this LED for the current position (Rett then Avvik)");
-        Console.WriteLine("  Q   — finished");
+        Console.WriteLine("  N   — next LED (wraps around)");
+        Console.WriteLine("  P   — previous LED (wraps around)");
+        Console.WriteLine("  S   — save current LED for this position (Rett first, then Avvik)");
+        Console.WriteLine("  0   — no physical LED for this position");
+        Console.WriteLine("  Esc — finished");
         Console.WriteLine();
 
         arduino.Send('3');
@@ -118,9 +118,9 @@ static class ConfigSession
         Console.WriteLine();
         Console.WriteLine("--- Command M: Moment Button Detection ---");
         Console.WriteLine("When the Arduino prompts, press the physical moment signal button.");
-        Console.WriteLine("  Y — detected input is correct");
-        Console.WriteLine("  N — retry");
-        Console.WriteLine("  Q — done");
+        Console.WriteLine("  Y   — detected input is correct");
+        Console.WriteLine("  N   — retry");
+        Console.WriteLine("  Esc — done");
         Console.WriteLine();
 
         arduino.Send('M');
@@ -141,8 +141,8 @@ static class ConfigSession
 
         Console.WriteLine("Step 2 — When Arduino prompts, move the switch to CW (clockwise).");
         Console.WriteLine("Step 3 — Move back to middle, then to CCW (counter-clockwise).");
-        Console.WriteLine("  Y — confirm / continue");
-        Console.WriteLine("  Q — done");
+        Console.WriteLine("  Y   — confirm / continue");
+        Console.WriteLine("  Esc — done");
         Console.WriteLine();
 
         arduino.Send('D');
@@ -766,21 +766,24 @@ static class ConfigSession
         Console.WriteLine();
     }
 
-    // Relay keypresses to Arduino until Q (or Escape). Echoes each sent key.
+    // Relay keypresses to Arduino until Escape. Echoes each sent key.
     static void Relay(ArduinoConnection arduino)
     {
-        Console.WriteLine("(Keystrokes forwarded to Arduino.  Q = return to config menu  X = emergency stop)");
+        Console.WriteLine("(Keystrokes forwarded to Arduino.  Esc = return to config menu  X = emergency stop)");
         Console.WriteLine();
 
         while (true)
         {
             var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Escape)
+            {
+                Console.WriteLine("[Esc]");
+                arduino.Send('\x1B');
+                break;
+            }
             char c = char.ToUpper(key.KeyChar);
             Console.WriteLine($"→ {c}");
             arduino.Send(c);
-
-            if (c == 'Q' || key.Key == ConsoleKey.Escape)
-                break;
         }
         Console.WriteLine();
     }
