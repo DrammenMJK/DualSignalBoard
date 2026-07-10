@@ -36,10 +36,10 @@ else
 }
 
 Console.WriteLine($"Connecting to {portName} at 115200 baud...");
-using var arduino = new ArduinoConnection(portName);
+using var conn = new ArduinoConnection(portName);
 try
 {
-    arduino.Open();
+    conn.Open();
 }
 catch (Exception ex)
 {
@@ -47,41 +47,44 @@ catch (Exception ex)
     return;
 }
 
-// Arduino resets when the serial port opens (CH340 DTR line).
+// Arduino resets on serial connect (DTR). Wait for boot.
 Console.WriteLine("Waiting for Arduino to initialise...");
 Thread.Sleep(2000);
-arduino.Send('S');   // request EEPROM status -- response arrives via ! lines
-Thread.Sleep(400);   // allow all status lines to arrive before showing menu
+
+var arduino = new ArduinoDevice(conn);
+
+// Verify connection
+if (!arduino.Ping())
+{
+    Console.WriteLine("No response from Arduino (PING failed). Check connection.");
+    return;
+}
+
+// Read site configuration
+if (!arduino.Init())
+{
+    Console.WriteLine("Failed to read site info from Arduino (SI command failed).");
+    return;
+}
+Console.WriteLine($"Site: Pens {arduino.FirstPens}–{arduino.LastPens}  " +
+                  $"LED outputs: {arduino.NumLedOutputs}  " +
+                  $"Motor pairs: {arduino.NumPairs}");
+Console.WriteLine();
+
+// Show EEPROM status
+EepromStatus.Print(arduino);
 Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();
 
-// Main menu
-while (true)
-{
-    Console.WriteLine("D = Debug mode    C = Config mode    V = Verify    Q = Quit");
-    Console.Write("> ");
-    char cmd = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
-    Console.WriteLine(cmd);
+var menu = new Menu(
+    [
+        ('D', "Debug mode", () => DebugSession.Run(arduino)),
+        ('C', "Config mode", () => ConfigSession.Run(arduino)),
+        ('V', "Verify", () => VerifySession.Run(arduino)),
+    ],
+    quitOption: ('Q', "Quit")
+);
+menu.Run();
 
-    switch (cmd)
-    {
-        case 'D':
-            DebugSession.Run(arduino);
-            break;
-        case 'C':
-            ConfigSession.Run(arduino);
-            break;
-        case 'V':
-            VerifySession.Run(arduino);
-            break;
-        case 'Q':
-            arduino.Send('Q');
-            Console.WriteLine("Goodbye.");
-            return;
-        default:
-            Console.WriteLine("Unknown command.");
-            Console.WriteLine();
-            break;
-    }
-}
+Console.WriteLine("Goodbye.");

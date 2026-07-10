@@ -2,50 +2,77 @@ namespace DrammenMJKConfig;
 
 static class DebugSession
 {
-    public static void Run(ArduinoConnection arduino)
+    public static void Run(ArduinoDevice arduino)
     {
         Console.WriteLine();
         Console.WriteLine("=== Debug Mode ===");
-        arduino.Send('D');
-        Thread.Sleep(200); // allow Arduino banner to arrive before our menu
-        Console.WriteLine();
-        Console.WriteLine("  A — Toggle all LEDs on / off  (checks for wiring shorts)");
-        Console.WriteLine("  L — Loop all LEDs one at a time, 1 second each");
-        Console.WriteLine("  Q — Exit debug mode");
-        Console.WriteLine();
 
+        new Menu(
+            [
+                ('A', "All LEDs on",        () => { for (int i = 0; i < arduino.NumLedOutputs; i++) arduino.SetLed(i, true); Console.WriteLine("All LEDs on."); }),
+                ('O', "All LEDs off",       () => { arduino.AllLedsOff(); Console.WriteLine("All LEDs off."); }),
+                ('L', "LED snake",          () => RunLedSnake(arduino)),
+                ('I', "Light LED by index", () => LightLedByIndex(arduino)),
+            ],
+            quitOption: ('Q', "Back")
+        ).Run();
+
+        arduino.AllLedsOff();
+        Console.WriteLine();
+    }
+
+    private static void LightLedByIndex(ArduinoDevice arduino)
+    {
+        Console.WriteLine($"Press 0–9 to light that LED (max index {arduino.NumLedOutputs - 1}), O = all off, Esc = back.");
         while (true)
         {
-            Console.Write("Debug> ");
-            char cmd = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
-            Console.WriteLine(cmd);
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Escape) { Console.WriteLine(); return; }
 
-            switch (cmd)
+            char k = char.ToUpper(key.KeyChar);
+            if (k == 'O')
             {
-                case 'A':
-                    Console.WriteLine("Toggling all LEDs...");
-                    arduino.Send('A');
-                    break;
-
-                case 'L':
-                    Console.WriteLine("LED loop running — press any key to stop.");
-                    arduino.Send('L');
-                    Console.ReadKey(intercept: true);
-                    arduino.Send('Q'); // tell Arduino to stop the loop
-                    Thread.Sleep(100);
-                    Console.WriteLine("\nLoop stopped.");
-                    break;
-
-                case 'Q':
-                    arduino.Send('Q');
-                    Console.WriteLine("Exiting debug mode.");
-                    Console.WriteLine();
-                    return;
-
-                default:
-                    Console.WriteLine("Unknown. A = all LEDs   L = LED loop   Q = exit");
-                    break;
+                arduino.AllLedsOff();
+                Console.WriteLine("O  — all off.");
+                continue;
+            }
+            if (k >= '0' && k <= '9')
+            {
+                int idx = k - '0';
+                if (idx < arduino.NumLedOutputs)
+                {
+                    arduino.SetLed(idx, true);
+                    Console.WriteLine($"{k}  — LED {idx} on.");
+                }
+                else
+                {
+                    Console.WriteLine($"{k}  — out of range (max {arduino.NumLedOutputs - 1}).");
+                }
             }
         }
+    }
+
+    private static void RunLedSnake(ArduinoDevice arduino)
+    {
+        Console.WriteLine("LED snake running... press any key to stop.");
+        arduino.AllLedsOff();
+        int idx = 0;
+        int direction = 1;
+        int numLeds = arduino.NumLedOutputs;
+
+        while (!Console.KeyAvailable)
+        {
+            arduino.SetLed(idx, true);
+            Thread.Sleep(80);
+            arduino.SetLed(idx, false);
+
+            idx += direction;
+            if (idx >= numLeds) { idx = numLeds - 2; direction = -1; }
+            if (idx < 0)        { idx = 1;            direction =  1; }
+        }
+
+        Console.ReadKey(intercept: true);
+        arduino.AllLedsOff();
+        Console.WriteLine("Snake stopped.");
     }
 }
