@@ -1,0 +1,195 @@
+@page "/"
+
+<PageTitle>Fossli — Mimic Panel</PageTitle>
+
+<div class="mimic-wrap">
+<svg viewBox="0 0 1510 643" xmlns="http://www.w3.org/2000/svg" class="mimic-svg">
+
+    <!-- Panel background -->
+    <rect width="1510" height="643" fill="#f0f0f0" stroke="#111" stroke-width="5"/>
+
+    <!-- ── TRACKS  (grey, 8 px) ──────────────────────────────── -->
+    <!-- Track 41: far-left horizontal -->
+    <line x1="10"  y1="252" x2="200" y2="252" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- 101 approach to B -->
+    <line x1="200" y1="252" x2="248" y2="252" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Track 42: diagonal upper-left from B -->
+    <line x1="248" y1="252" x2="120" y2="147" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- B right to C -->
+    <line x1="278" y1="266" x2="386" y2="266" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- C upper to track 1 -->
+    <!--  <line x1="413" y1="268" x2="510" y2="278" stroke="#888" stroke-width="8" stroke-linecap="round"/> -->
+    <!-- Track 1: long upper horizontal -->
+    <line x1="413" y1="278" x2="1162" y2="278" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- C lower to D -->
+    <line x1="413" y1="302" x2="480" y2="328" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- D to track 2 -->
+    <line x1="504" y1="322" x2="1065" y2="322" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- D lower to E (track 3) -->
+    <line x1="504" y1="342" x2="604" y2="378" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <line x1="604" y1="378" x2="965" y2="378" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- E up to F -->
+    <line x1="980" y1="374" x2="1062" y2="322" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- F to G -->
+    <line x1="1086" y1="322" x2="1158" y2="280" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- G to H -->
+    <line x1="1178" y1="278" x2="1254" y2="235" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Track 23 upper horizontal -->
+    <line x1="1040" y1="213" x2="1184" y2="213" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Track 22 -->
+    <line x1="1040" y1="247" x2="1184" y2="247" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- I to H connector (track 7 area) -->
+    <line x1="1202" y1="210" x2="1262" y2="234" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Track 21: H diagonal to upper right -->
+    <line x1="1280" y1="228" x2="1396" y2="143" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Track 31: E area to Dreieskive -->
+    <line x1="988"  y1="390" x2="1283" y2="425" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+    <!-- Dreieskive right exit -->
+    <line x1="1392" y1="428" x2="1500" y2="428" stroke="#888" stroke-width="8" stroke-linecap="round"/>
+
+    <!-- ── TRACK LABELS ──────────────────────────────────────── -->
+    <text x="48"   y="239" fill="#444" font-size="14" font-family="sans-serif">42</text>
+    <text x="48"   y="272" fill="#444" font-size="14" font-family="sans-serif">41</text>
+    <text x="200"  y="233" fill="#444" font-size="14" font-family="sans-serif">101</text>
+    <text x="700"  y="266" fill="#444" font-size="14" font-family="sans-serif">1</text>
+    <text x="700"  y="312" fill="#444" font-size="14" font-family="sans-serif">2</text>
+    <text x="700"  y="376" fill="#444" font-size="14" font-family="sans-serif">3</text>
+    <text x="1090" y="203" fill="#444" font-size="14" font-family="sans-serif">23</text>
+    <text x="1090" y="238" fill="#444" font-size="14" font-family="sans-serif">22</text>
+    <text x="1180" y="200" fill="#444" font-size="14" font-family="sans-serif">7</text>
+    <text x="1360" y="140" fill="#444" font-size="14" font-family="sans-serif">21</text>
+    <text x="1125" y="445" fill="#444" font-size="14" font-family="sans-serif">31</text>
+
+    <!-- ── SIGNAL M ───────────────────────────────────────────── -->
+    <rect x="62" y="237" width="56" height="28" fill="#1a1a1a" stroke="#555" stroke-width="1.5" rx="3"/>
+    <circle cx="76"  cy="251" r="8" fill="#22cc22"/>
+    <circle cx="90"  cy="251" r="8" fill="#cc2222"/>
+    <circle cx="106" cy="251" r="8" fill="#22cc22"/>
+    <text x="90" y="229" text-anchor="middle" fill="#333" font-size="14" font-family="sans-serif">M</text>
+    <text x="140" y="271" fill="#333" font-size="13" font-family="sans-serif">Til Vallekilen</text>
+
+    <!-- ── MOMENT BUTTON ─────────────────────────────────────── -->
+    <line x1="82" y1="288" x2="148" y2="340" stroke="#777" stroke-width="2" stroke-dasharray="6,4"/>
+    @((MarkupString)MomentBtn(175, 350))
+    <text x="175" y="398" text-anchor="middle" fill="#aa00aa" font-size="16" font-weight="bold" font-family="sans-serif">Moment</text>
+
+    <!-- ── FOSSLI LABEL ───────────────────────────────────────── -->
+    <rect x="588" y="148" width="212" height="58" fill="white" stroke="black" stroke-width="3"/>
+    <text x="694" y="191" text-anchor="middle" fill="black" font-size="34" font-weight="bold" font-family="serif">Fossli</text>
+
+    <!-- ── DREIESKIVE ─────────────────────────────────────────── -->
+    <circle cx="1390" cy="395" r="104" fill="#d4d4d4" stroke="#999" stroke-width="2"/>
+    @((MarkupString)PensSwitch(1390, 395, null))
+    <text x="1390" y="527" text-anchor="middle" fill="#cc0000" font-size="18" font-weight="bold" font-family="sans-serif">Dreieskive</text>
+
+    <!-- ── PENS B ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(260, 236, "B"))
+    @((MarkupString)Led(213, 222, true))
+    @((MarkupString)Led(213, 252, false))
+
+    <!-- ── PENS C ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(400, 284, "C"))
+    @((MarkupString)Led(383, 270, false))
+    @((MarkupString)Led(408, 299, false))
+
+    <!-- ── PENS D ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(492, 333, "D"))
+    @((MarkupString)Led(475, 322, false))
+    @((MarkupString)Led(500, 344, false))
+
+    <!-- ── PENS E ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(975, 385, "E"))
+    @((MarkupString)Led(959, 372, false))
+    @((MarkupString)Led(982, 398, false))
+
+    <!-- ── PENS F ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(1073, 322, "F"))
+    @((MarkupString)Led(1056, 315, false))
+    @((MarkupString)Led(1079, 332, false))
+
+    <!-- ── PENS G ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(1167, 278, "G"))
+    @((MarkupString)Led(1150, 272, false))
+    @((MarkupString)Led(1173, 287, false))
+
+    <!-- ── PENS H ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(1263, 233, "H"))
+    @((MarkupString)Led(1247, 226, false))
+    @((MarkupString)Led(1271, 240, false))
+
+    <!-- ── PENS I ──────────────────────────────────────────────── -->
+    @((MarkupString)PensSwitch(1193, 210, "I"))
+    @((MarkupString)Led(1178, 212, false))
+    @((MarkupString)Led(1201, 215, false))
+
+</svg>
+</div>
+
+<style>
+    .mimic-wrap {
+        width: 100%;
+        background: #111;
+        padding: 4px;
+        box-sizing: border-box;
+    }
+    .mimic-svg {
+        width: 100%;
+        height: auto;
+        display: block;
+    }
+</style>
+
+@code {
+    // Physical analog toggle switch: metallic housing, dark recess, bat lever.
+    // label=null → no label (used for Dreieskive inside the turntable circle).
+    // Bat at -20° = Rett position (lever tilted upper-left).
+    string PensSwitch(int cx, int cy, string? label)
+    {
+        const int batAngle = -20;
+
+        string lbl = label is null ? "" :
+            $"<text x=\"{cx}\" y=\"{cy + 61}\" text-anchor=\"middle\" " +
+            "fill=\"#cc0000\" font-size=\"18\" font-weight=\"bold\" " +
+            $"font-family=\"sans-serif\">{label}</text>";
+
+        return
+            $"<g transform=\"translate({cx},{cy})\">" +
+                // Housing outer (metallic grey)
+                "<rect x=\"-20\" y=\"-38\" width=\"40\" height=\"76\" rx=\"6\" " +
+                    "fill=\"#b0b4bc\" stroke=\"#5a6070\" stroke-width=\"2.5\"/>" +
+                // Dark recess
+                "<rect x=\"-14\" y=\"-30\" width=\"28\" height=\"60\" rx=\"4\" " +
+                    "fill=\"#1e2028\"/>" +
+                // Bat lever
+                $"<g transform=\"rotate({batAngle})\">" +
+                    "<rect x=\"-5\" y=\"-26\" width=\"10\" height=\"36\" rx=\"5\" " +
+                        "fill=\"#d0d4e0\" stroke=\"#909090\" stroke-width=\"1.5\"/>" +
+                    // Bat head (wider rounded cap)
+                    "<ellipse cx=\"0\" cy=\"-26\" rx=\"7\" ry=\"5\" " +
+                        "fill=\"#e8ecf8\" stroke=\"#aaa\" stroke-width=\"1\"/>" +
+                "</g>" +
+            "</g>" +
+            lbl;
+    }
+
+    // LED indicator: yellow when on, dark grey when off.
+    string Led(int cx, int cy, bool on)
+    {
+        string fill   = on ? "#FFD700" : "#666";
+        string stroke = on ? "#CC8800" : "#444";
+        return $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"9\" " +
+               $"fill=\"{fill}\" stroke=\"{stroke}\" stroke-width=\"1.5\"/>";
+    }
+
+    // Moment push-button: magenta circle with white cross.
+    string MomentBtn(int cx, int cy)
+    {
+        return
+            $"<circle cx=\"{cx}\" cy=\"{cy}\" r=\"28\" " +
+                "fill=\"#cc44cc\" stroke=\"#880088\" stroke-width=\"2.5\"/>" +
+            $"<line x1=\"{cx - 12}\" y1=\"{cy}\" x2=\"{cx + 12}\" y2=\"{cy}\" " +
+                "stroke=\"white\" stroke-width=\"3\"/>" +
+            $"<line x1=\"{cx}\" y1=\"{cy - 12}\" x2=\"{cx}\" y2=\"{cy + 12}\" " +
+                "stroke=\"white\" stroke-width=\"3\"/>";
+    }
+}
