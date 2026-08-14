@@ -1,0 +1,31 @@
+{
+  "_todo": [
+    "FCSBL's direction table below is fully resolved (from PlanExtended.md's 'Port B config Left' / 'Port A config Left'), but it mixes two numbering bases as documented: Port B pins are given 1-based (1-8), Port A pins 0-based (0-5, 7). Converted here to 0-based bits throughout (Port B pin N -> bit N-1; Port A pins used as-is). Worth double-checking against the schematic once available, since this conversion wasn't independently confirmed.",
+    "FCSBL: of the 16 bits, 15 are actually connected to something; 1 (Port A bit 6) is not connected at all. Of the 15 connected bits, 14 are functionally used (3 motors + 3 signal LEDs + 1 status LED + 6 feedback + 1 track detect) and 1 (Port B bit 3 / pin 4) is connected -- wired to the motor driver output stage -- but idle, since no switch is attached to it. Both spares are still given a direction here ('out' for B3 since it's genuinely wired as a motor output; 'in-pu' for A6 to avoid leaving a floating input) even though neither has a SystemConfig.json entry.",
+    "Signal lamp dimming, resolved: software PWM, ported as-is from the original SignalLys_2X_Momentbrytere.ino (FadeGroup/ApplyNormalOutputsSlowly -- 1s fade, 60 linear steps, ~1kHz software-PWM period via busy-toggling the pin). No hardware PWM was used even on the original's PWM-capable pins, so nothing changes conceptually driving it over I2C to bits 4-6 of Port B instead of direct GPIO -- it's still just an 'out' bit here. The real consequence is operational, not a hardware.json modeling question: each fade busy-loops I2C writes for up to 1 second, monopolizing FCSBL's bus for that duration."
+  ],
+  "boards": [
+    {
+      "name": "Fossli Høyre (FCSBR)",
+      "category": "SCB",
+      "chips": [
+        {
+          "vaddr": "0x20",
+          "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu"],
+          "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
+        }
+      ]
+    },
+    {
+      "name": "Fossli Venstre (FCSBL)",
+      "category": "SCB",
+      "chips": [
+        {
+          "vaddr": "0x21",
+          "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu"],
+          "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
+        }
+      ]
+    }
+  ]
+}

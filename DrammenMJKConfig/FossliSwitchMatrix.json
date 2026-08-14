@@ -1,0 +1,10 @@
+{
+  "site": "Fossli",
+  "routing": {
+    "E_Avvik": [
+      { "avvik": ["E"] },
+      { "rett":  ["F"] }
+    ],
+    "F_Rett": []
+  }
+}
