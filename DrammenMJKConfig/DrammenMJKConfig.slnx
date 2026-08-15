@@ -1,3 +1,5 @@
 <Solution>
-  <Project Path="DrammenMJKConfig.csproj" />
+  <Project Path="DrammenMJKConfig/DrammenMJKConfig.csproj" />
+  <Project Path="DrammenMJKConfig.IntegrationTests/DrammenMJKConfig.IntegrationTests.csproj" />
+  <Project Path="DrammenMJKConfig.Tests/DrammenMJKConfig.Tests.csproj" />
 </Solution>

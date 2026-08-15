@@ -60,28 +60,23 @@ if (!arduino.Ping())
     return;
 }
 
-// Read site configuration
+// Confirm the Arduino responds sanely (Phase 1 firmware has no compiled-in
+// site topology to report — that lives entirely in BoardConfig on the PC side).
 if (!arduino.Init())
 {
     Console.WriteLine("Failed to read site info from Arduino (SI command failed).");
     return;
 }
-Console.WriteLine($"Site: Pens {arduino.FirstPens}–{arduino.LastPens}  " +
-                  $"LED outputs: {arduino.NumLedOutputs}  " +
-                  $"Motor pairs: {arduino.NumPairs}");
-Console.WriteLine();
-
-// Show EEPROM status
-EepromStatus.Print(arduino);
+Console.WriteLine($"Connected. SVB: {BoardConfig.Svb.Name}");
 Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();
 
 var menu = new Menu(
     [
-        ('D', "Debug mode", () => DebugSession.Run(arduino)),
         ('C', "Config mode", () => ConfigSession.Run(arduino)),
-        ('V', "Verify", () => VerifySession.Run(arduino)),
+        ('O', "Operate — drive configured switches", () => CommandSession.Run(arduino)),
+        ('S', "Status — EEPROM summary", () => StatusSession.Run(arduino)),
     ],
     quitOption: ('Q', "Quit")
 );
