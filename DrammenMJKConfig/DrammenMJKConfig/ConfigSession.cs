@@ -14,6 +14,8 @@ static class ConfigSession
                 ('H', "Hardware config (upload/download hardware.json)",   () => HardwareConfigSession.Run(arduino)),
                 ('1', "Motor scan — find switch motors + feedback",         () => MotorScan(arduino)),
                 ('J', "System config (upload/download SystemConfig.json)", () => SystemConfigSession.Run(arduino)),
+                ('E', "Edit switch config — fix labeling/polarity mistakes", () => SwitchEditSession.Run(arduino)),
+                ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),
                 ('R', "Reset: erase all config from EEPROM",               () => ResetConfig(arduino)),
             ],
             quitOption: ('Q', "Exit config mode")
@@ -33,7 +35,10 @@ static class ConfigSession
     // -------------------------------------------------------------------------
     static void MotorScan(ArduinoDevice arduino)
     {
-        const int FeedbackTimeoutMs = 3000;
+        // Real switch motors take several seconds to travel end-to-end (~5s
+        // observed) -- needs real margin above that, not just above the I2C
+        // round-trip time.
+        const int FeedbackTimeoutMs = 10000;
 
         Console.WriteLine();
         Console.WriteLine("--- Command 1: Motor Scan ---");
@@ -60,14 +65,48 @@ static class ConfigSession
         Console.WriteLine($"Declared dreieskive (pins {scb.DreieskivePins.Base}/{scb.DreieskivePins.Upper}) and status LED (bit {scb.StatusLedPin.Bit}).");
         Console.WriteLine();
 
-        // Pre-populate from EEPROM so a re-run only scans what's still unassigned.
-        var assignedLabels = new HashSet<string>();
-        var firedBits = new HashSet<int>();
+        // Check what's already in EEPROM for THIS board's switches before
+        // deciding scope -- scoped to scb.Switches, not every SCB system-wide.
+        // Silently skipping already-configured switches with no explanation
+        // looked exactly like the scan doing nothing; ask instead.
+        var scbLabels = scb.Switches.Select(s => s.Label).ToHashSet();
+        var alreadyConfigured = new List<(string Label, int MotorBit)>();
         foreach (var (_, motorBit, label, slot) in BoardConfig.AllSwitchSlots())
         {
-            if (arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) == ArduinoDevice.Unset) continue;
-            assignedLabels.Add(label);
-            firedBits.Add(motorBit);
+            if (!scbLabels.Contains(label)) continue;
+            if (arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) != ArduinoDevice.Unset)
+                alreadyConfigured.Add((label, motorBit));
+        }
+
+        var assignedLabels = new HashSet<string>();
+        var firedBits = new HashSet<int>();
+
+        if (alreadyConfigured.Count > 0)
+        {
+            Console.WriteLine($"{alreadyConfigured.Count} switch(es) on {scb.Name} already have EEPROM config:");
+            foreach (var (label, motorBit) in alreadyConfigured)
+                Console.WriteLine($"  {label} (motor bit {motorBit})");
+            Console.WriteLine();
+            Console.Write("K = keep existing, only scan what's new   O = overwrite all, rescan everything   Esc = abort: ");
+            char choice = ReadChar(ch => char.ToUpper(ch) == 'K' || char.ToUpper(ch) == 'O' || ch == EscKey);
+            Console.WriteLine(choice == EscKey ? "[Esc]" : char.ToUpper(choice).ToString());
+            Console.WriteLine();
+
+            if (choice == EscKey)
+            {
+                Console.WriteLine("Motor scan aborted.");
+                Console.WriteLine();
+                return;
+            }
+            if (char.ToUpper(choice) == 'K')
+            {
+                foreach (var (label, motorBit) in alreadyConfigured)
+                {
+                    assignedLabels.Add(label);
+                    firedBits.Add(motorBit);
+                }
+            }
+            // 'O': leave both sets empty -- rescan everything, overwriting stored slots.
         }
 
         bool userAborted = false;
@@ -89,7 +128,23 @@ static class ConfigSession
                     break;
                 }
 
-                if (!arduino.McpSetBit(vaddr, 'B', motorBit, false))
+                // Fire by toggling away from whatever the bit is currently at --
+                // NOT a hardcoded false. apply_board_hw() already leaves every
+                // motor bit at false (OLATB=0x00 safe default) right after boot,
+                // so firing with a hardcoded false was a no-op on a fresh board:
+                // nothing ever transitioned, so nothing moved. Reading back first
+                // guarantees an actual transition regardless of starting state.
+                int restOlatB = arduino.McpReadPort(vaddr, 'B');
+                if (restOlatB < 0)
+                {
+                    Console.WriteLine("  I2C error reading motor rest state. Aborting scan.");
+                    userAborted = true;
+                    break;
+                }
+                bool restState = ((restOlatB >> motorBit) & 1) != 0;
+                bool fireState = !restState;
+
+                if (!arduino.McpSetBit(vaddr, 'B', motorBit, fireState))
                 {
                     Console.WriteLine("  I2C error firing motor. Aborting scan.");
                     userAborted = true;
@@ -99,7 +154,7 @@ static class ConfigSession
                 int changed = arduino.McpPollChange(vaddr, 'A', (byte)baseline, FeedbackTimeoutMs);
                 if (changed < 0)
                 {
-                    Console.WriteLine("  No feedback change detected — wiring problem?");
+                    Console.WriteLine("  No feedback detected (timed out). Nothing may be installed at this position yet.");
                     Console.Write("  1 = retry   0 = skip this pin   Esc = abort: ");
                     char c = ReadChar(ch => ch == '1' || ch == '0' || ch == EscKey);
                     Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
@@ -147,7 +202,17 @@ static class ConfigSession
                 char pos = char.ToUpper(ReadChar(ch => char.ToUpper(ch) == 'R' || char.ToUpper(ch) == 'A'));
                 Console.WriteLine(pos);
 
-                byte polarity = pos == 'R' ? (byte)0 : (byte)1;
+                // polarity must be the literal OLATB bit value that drives to
+                // Rett -- Firmware.ino's cmdSW reads it that way directly
+                // (targetLevel = pos=='R' ? polarity : 1-polarity). fireState
+                // is the bit value the switch is actually AT right now, which
+                // `pos` was just confirmed against; if pos is Rett, fireState
+                // IS the Rett value, otherwise Rett is the opposite (restState).
+                // A hardcoded 0/1 here (ignoring fireState) only happened to
+                // work while firing always drove to a fixed value -- now that
+                // firing toggles from the real rest state, it doesn't.
+                bool rettBitValue = pos == 'R' ? fireState : !fireState;
+                byte polarity = (byte)(rettBitValue ? 1 : 0);
                 int otherBit = highBit == pairLow ? pairLow + 1 : pairLow;
                 byte rettBit  = pos == 'R' ? (byte)highBit : (byte)otherBit;
                 byte avvikBit = pos == 'R' ? (byte)otherBit : (byte)highBit;
@@ -155,8 +220,10 @@ static class ConfigSession
                 // Verification move — not strictly required (the pair structure
                 // already implies the second bit), but catches wiring/mechanical
                 // faults at config time by confirming the opposite position too.
+                // Toggles back to the original rest state (not a hardcoded true),
+                // for the same reason firing above toggles instead of hardcoding.
                 Console.WriteLine("  Verifying opposite position...");
-                arduino.McpSetBit(vaddr, 'B', motorBit, true);
+                arduino.McpSetBit(vaddr, 'B', motorBit, restState);
                 int confirmChanged = arduino.McpPollChange(vaddr, 'A', (byte)changed, FeedbackTimeoutMs);
                 bool confirmed = confirmChanged >= 0 && ((confirmChanged >> otherBit) & 1) != 0;
                 if (!confirmed)

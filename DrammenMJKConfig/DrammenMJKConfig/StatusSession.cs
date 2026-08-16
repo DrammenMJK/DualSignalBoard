@@ -11,13 +11,32 @@ static class StatusSession
         Console.WriteLine();
         Console.WriteLine("=== Status: EEPROM summary ===");
 
-        PrintBoardHardwareTable(arduino);
-        PrintSystemConfig(arduino);
+        int chipCount = PrintBoardHardwareTable(arduino);
+        var (switchCount, totalSwitches) = PrintSystemConfig(arduino);
+        PrintMode(chipCount, switchCount, totalSwitches);
 
         Console.WriteLine();
     }
 
-    static void PrintBoardHardwareTable(ArduinoDevice arduino)
+    // No real firmware-tracked mode exists yet -- PLAN_Phase1.md's device
+    // state machine (Uninitialized -> Configuration -> Normal -> Fading) is a
+    // design note only, not implemented (no MODE byte, no command reports it).
+    // This is a best-effort read derived from EEPROM contents, not a live
+    // firmware state -- until the real state machine gets built.
+    static void PrintMode(int chipCount, int switchCount, int totalSwitches)
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Mode (inferred, not firmware-tracked) ---");
+
+        string mode = chipCount == 0
+            ? "UNINITIALIZED — no hardware.json uploaded yet"
+            : switchCount < totalSwitches
+                ? "CONFIGURATION — hardware set, switches incomplete"
+                : "NORMAL — hardware and all switches configured";
+        Console.WriteLine($"  {mode}");
+    }
+
+    static int PrintBoardHardwareTable(ArduinoDevice arduino)
     {
         Console.WriteLine();
         Console.WriteLine("--- Board hardware table ---");
@@ -29,7 +48,7 @@ static class StatusSession
             while (true)
             {
                 string? line = arduino.GetNextHardwareLine(2000);
-                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return; }
+                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return 0; }
                 if (line == "END") break;
 
                 var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
@@ -47,17 +66,28 @@ static class StatusSession
         if (rows.Count == 0)
         {
             Console.WriteLine("  No boards configured -- upload hardware.json first.");
-            return;
+            return 0;
         }
 
+        // Live presence check -- EEPROM says this chip is configured, but is
+        // it actually on the bus right now? Same MR-based technique Bench
+        // Test's Probe/Sweep use (a failed I2C read means no ACK).
         foreach (var r in rows)
-            Console.WriteLine($"  0x{r.VAddr:X2}: IODIR A={r.IodirA:X2} B={r.IodirB:X2}  GPPU A={r.GppuA:X2} B={r.GppuB:X2}");
+        {
+            bool present = arduino.McpReadPort(r.VAddr, 'A') >= 0;
+            string marker = present ? "" : "  [NOT FOUND ON BUS]";
+            Console.WriteLine($"  0x{r.VAddr:X2}: IODIR A={r.IodirA:X2} B={r.IodirB:X2}  GPPU A={r.GppuA:X2} B={r.GppuB:X2}{marker}");
+        }
+
+        return rows.Count;
     }
 
-    static void PrintSystemConfig(ArduinoDevice arduino)
+    static (int SwitchCount, int TotalSwitches) PrintSystemConfig(ArduinoDevice arduino)
     {
         Console.WriteLine();
         Console.WriteLine("--- Switches / dreieskive / status LED / fade config ---");
+
+        var allLabels = BoardConfig.AllSwitchSlots().Select(s => s.Label).ToList();
 
         var lines = new List<string>();
         arduino.SystemConfigDownloadStart();
@@ -66,7 +96,7 @@ static class StatusSession
             while (true)
             {
                 string? line = arduino.GetNextSystemConfigLine(2000);
-                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return; }
+                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return (0, allLabels.Count); }
                 if (line == "END") break;
                 lines.Add(line);
             }
@@ -76,16 +106,8 @@ static class StatusSession
         var file = new SystemConfigFile();
         SystemConfigJson.ApplyDownloadLines(file, lines);
 
-        var allLabels = BoardConfig.AllSwitchSlots().Select(s => s.Label).ToList();
         Console.WriteLine($"  Switches: {file.Switches.Count}/{allLabels.Count} configured");
-        foreach (string label in allLabels)
-        {
-            if (file.Switches.TryGetValue(label, out var sw))
-                Console.WriteLine($"    {label}: motor={sw.MotorVAddr} bit={sw.MotorBit} pol={sw.Polarity}" +
-                                   $"  fb Rett={sw.FeedbackRettBit} Avvik={sw.FeedbackAvvikBit}");
-            else
-                Console.WriteLine($"    {label}: not scanned");
-        }
+        SwitchTable.Print(arduino);
 
         Console.WriteLine(file.Dreieskive.MotorVAddr != null
             ? $"  Dreieskive: motor={file.Dreieskive.MotorVAddr} pinBase={file.Dreieskive.MotorPinBase}" +
@@ -102,5 +124,7 @@ static class StatusSession
         Console.WriteLine(fadeUnset
             ? "  Fade config: not set (EEPROM blank)"
             : $"  Fade config: {file.FadeConfig.FadeMs}ms / {file.FadeConfig.FadeSteps} steps / {file.FadeConfig.PwmPeriodUs}us PWM period");
+
+        return (file.Switches.Count, allLabels.Count);
     }
 }

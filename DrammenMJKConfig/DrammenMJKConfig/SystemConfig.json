@@ -1,18 +1,46 @@
 {
   "_todo": [
-    "FCSBL's switch labels are now known: 101, 2, 4 (matching the older letter-based system's Pens B, C, D at Fossli). Not yet in the switches section below -- that section means 'discovered wiring', and only the labels are known so far, not which of motor bits 0,1,2 is which. A Motor-Scan-style pass (fire each bit, ask the operator which switch moved) is what fills that in, same process as FCSBR; the physical facts needed to run that scan (motor bits 0,1,2 on vaddr 0x21; feedback pairs (0,1)/(2,3)/(4,5) on the same chip) are already known from hardware.json.",
-    "FCSBL drives one signal (3 lamps: Red, Green1, Green2) on Port B bits 4,5,6 -- range now known, but which specific bit is which color is not. The doc also says 'we have two of these, so they should be numbered' -- Fossli has 2 signals station-wide (mirroring the original DualSignal's Signal A/B), but only one is confirmed to be on FCSBL. Where the second signal lives is not yet stated; only one signals entry is populated below.",
-    "Signal numbering is explicitly deferred in PlanExtended.md ('The letters we use there is now converted to numbers. Will come back to that.') -- the signals section below stays structurally unconfigured even though the candidate bits are known.",
-    "Track detection is now known to be Port A bit 7 on 0x21 (below). Its polarity (which level = train present) still needs configuring -- same as the old DualSignal system's active-HIGH Train input, which was the one input that didn't follow the usual active-low convention.",
-    "fadeConfig values are the original SignalLys_2X_Momentbrytere.ino defaults (FadeMs=1000, FadeSteps=60, PwmPeriodUs=1000), ported as-is rather than recomputed. Unlike the original's hardcoded static const, these are now genuine config -- editable here without a firmware recompile -- but nobody has had a reason to change them yet, so they stay at the values already proven on the original hardware."
+    "FCSBL\u0027s switch labels are now known: 101, 2, 4 (matching the older letter-based system\u0027s Pens B, C, D at Fossli). Not yet in the switches section below -- that section means \u0027discovered wiring\u0027, and only the labels are known so far, not which of motor bits 0,1,2 is which. A Motor-Scan-style pass (fire each bit, ask the operator which switch moved) is what fills that in, same process as FCSBR; the physical facts needed to run that scan (motor bits 0,1,2 on vaddr 0x21; feedback pairs (0,1)/(2,3)/(4,5) on the same chip) are already known from hardware.json.",
+    "FCSBL drives one signal (3 lamps: Red, Green1, Green2) on Port B bits 4,5,6 -- range now known, but which specific bit is which color is not. The doc also says \u0027we have two of these, so they should be numbered\u0027 -- Fossli has 2 signals station-wide (mirroring the original DualSignal\u0027s Signal A/B), but only one is confirmed to be on FCSBL. Where the second signal lives is not yet stated; only one signals entry is populated below.",
+    "Signal numbering is explicitly deferred in PlanExtended.md (\u0027The letters we use there is now converted to numbers. Will come back to that.\u0027) -- the signals section below stays structurally unconfigured even though the candidate bits are known.",
+    "Track detection is now known to be Port A bit 7 on 0x21 (below). Its polarity (which level = train present) still needs configuring -- same as the old DualSignal system\u0027s active-HIGH Train input, which was the one input that didn\u0027t follow the usual active-low convention.",
+    "fadeConfig values are the original SignalLys_2X_Momentbrytere.ino defaults (FadeMs=1000, FadeSteps=60, PwmPeriodUs=1000), ported as-is rather than recomputed. Unlike the original\u0027s hardcoded static const, these are now genuine config -- editable here without a firmware recompile -- but nobody has had a reason to change them yet, so they stay at the values already proven on the original hardware."
   ],
   "site": "Fossli",
   "svb": "Fossli",
   "switches": {
-    "1":   { "motorVAddr": "0x20", "motorBit": 0, "polarity": 0, "feedbackVAddr": "0x20", "feedbackRettBit": 0, "feedbackAvvikBit": 1 },
-    "3":   { "motorVAddr": "0x20", "motorBit": 1, "polarity": 1, "feedbackVAddr": "0x20", "feedbackRettBit": 3, "feedbackAvvikBit": 2 },
-    "5/6": { "motorVAddr": "0x20", "motorBit": 2, "polarity": 0, "feedbackVAddr": "0x20", "feedbackRettBit": 4, "feedbackAvvikBit": 5 },
-    "7":   { "motorVAddr": "0x20", "motorBit": 3, "polarity": 0, "feedbackVAddr": "0x20", "feedbackRettBit": 6, "feedbackAvvikBit": 7 }
+    "1": {
+      "motorVAddr": "0x20",
+      "motorBit": 0,
+      "polarity": 0,
+      "feedbackVAddr": "0x20",
+      "feedbackRettBit": 0,
+      "feedbackAvvikBit": 1
+    },
+    "3": {
+      "motorVAddr": "0x20",
+      "motorBit": 0,
+      "polarity": 1,
+      "feedbackVAddr": "0x20",
+      "feedbackRettBit": 6,
+      "feedbackAvvikBit": 7
+    },
+    "5/6": {
+      "motorVAddr": "0x20",
+      "motorBit": 2,
+      "polarity": 0,
+      "feedbackVAddr": "0x20",
+      "feedbackRettBit": 4,
+      "feedbackAvvikBit": 5
+    },
+    "7": {
+      "motorVAddr": "0x20",
+      "motorBit": 3,
+      "polarity": 0,
+      "feedbackVAddr": "0x20",
+      "feedbackRettBit": 6,
+      "feedbackAvvikBit": 7
+    }
   },
   "dreieskive": {
     "motorVAddr": "0x20",
@@ -24,14 +52,44 @@
     "bit": 7
   },
   "svbSwitches": {
-    "1":          { "vaddr": null, "bit": null },
-    "3":          { "vaddr": null, "bit": null },
-    "5/6":        { "vaddr": null, "bit": null },
-    "7":          { "vaddr": null, "bit": null },
-    "dreieskive": { "vaddr": null, "bitCw": null, "bitCcw": null }
+    "1": {
+      "vaddr": null,
+      "bit": null,
+      "bitCw": null,
+      "bitCcw": null
+    },
+    "3": {
+      "vaddr": null,
+      "bit": null,
+      "bitCw": null,
+      "bitCcw": null
+    },
+    "5/6": {
+      "vaddr": null,
+      "bit": null,
+      "bitCw": null,
+      "bitCcw": null
+    },
+    "7": {
+      "vaddr": null,
+      "bit": null,
+      "bitCw": null,
+      "bitCcw": null
+    },
+    "dreieskive": {
+      "vaddr": null,
+      "bit": null,
+      "bitCw": null,
+      "bitCcw": null
+    }
   },
   "signals": {
-    "1": { "vaddr": "0x21", "redBit": null, "green1Bit": null, "green2Bit": null }
+    "1": {
+      "vaddr": "0x21",
+      "redBit": null,
+      "green1Bit": null,
+      "green2Bit": null
+    }
   },
   "trackDetection": {
     "vaddr": "0x21",
