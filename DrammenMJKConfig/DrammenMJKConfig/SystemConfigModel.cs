@@ -23,6 +23,10 @@ sealed class DreieskiveEntry
     [JsonPropertyName("cwPolarity")] public int? CwPolarity { get; set; }
 }
 
+// One board's status LED. Keyed by board name in SystemConfigFile.StatusLeds
+// -- was a single top-level entry until FCSBL showed up with its own status
+// LED distinct from FCSBR's (EEPROM followed the same change, see
+// Firmware.ino's REGION_LED_BIT).
 sealed class StatusLedEntry
 {
     [JsonPropertyName("vaddr")] public string? VAddr { get; set; }
@@ -47,6 +51,9 @@ sealed class SignalEntry
     [JsonPropertyName("green2Bit")] public int? Green2Bit { get; set; }
 }
 
+// Keyed by board name in SystemConfigFile.TrackDetections -- was a single
+// top-level entry before FCSBL's track detection made "one per board"
+// necessary, same reasoning as StatusLeds.
 sealed class TrackDetectionEntry
 {
     [JsonPropertyName("vaddr")] public string? VAddr { get; set; }
@@ -54,13 +61,14 @@ sealed class TrackDetectionEntry
     [JsonPropertyName("activeHigh")] public bool? ActiveHigh { get; set; }
 }
 
-// Fade loop timing parameters -- config, not per-call state (see PLAN_Phase1.md,
-// Signal lamp logic). Defaults are the original SignalLys_2X_Momentbrytere.ino values.
-sealed class FadeConfigEntry
+// One board's inverter-enable pin -- declared (from boards.json), not
+// discovered, but mirrored here like everything else in SystemConfig.json
+// for visibility/round-trip. Keyed by board name.
+sealed class InverterEnableEntry
 {
-    [JsonPropertyName("fadeMs")] public int FadeMs { get; set; } = 1000;
-    [JsonPropertyName("fadeSteps")] public int FadeSteps { get; set; } = 60;
-    [JsonPropertyName("pwmPeriodUs")] public int PwmPeriodUs { get; set; } = 1000;
+    [JsonPropertyName("vaddr")] public string? VAddr { get; set; }
+    [JsonPropertyName("port")] public string? Port { get; set; } // "A" or "B"
+    [JsonPropertyName("bit")] public int? Bit { get; set; }
 }
 
 sealed class SystemConfigFile
@@ -70,9 +78,9 @@ sealed class SystemConfigFile
     [JsonPropertyName("svb")] public string Svb { get; set; } = "";
     [JsonPropertyName("switches")] public Dictionary<string, SwitchEntry> Switches { get; set; } = new();
     [JsonPropertyName("dreieskive")] public DreieskiveEntry Dreieskive { get; set; } = new();
-    [JsonPropertyName("statusLed")] public StatusLedEntry StatusLed { get; set; } = new();
+    [JsonPropertyName("statusLeds")] public Dictionary<string, StatusLedEntry> StatusLeds { get; set; } = new();
     [JsonPropertyName("svbSwitches")] public Dictionary<string, SvbSwitchEntry> SvbSwitches { get; set; } = new();
     [JsonPropertyName("signals")] public Dictionary<string, SignalEntry> Signals { get; set; } = new();
-    [JsonPropertyName("trackDetection")] public TrackDetectionEntry TrackDetection { get; set; } = new();
-    [JsonPropertyName("fadeConfig")] public FadeConfigEntry FadeConfig { get; set; } = new();
+    [JsonPropertyName("trackDetection")] public Dictionary<string, TrackDetectionEntry> TrackDetections { get; set; } = new();
+    [JsonPropertyName("inverterEnables")] public Dictionary<string, InverterEnableEntry> InverterEnables { get; set; } = new();
 }

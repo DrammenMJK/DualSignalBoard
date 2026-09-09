@@ -1,0 +1,100 @@
+{
+  "_todo": [
+    "addressMode is 'test': every chip resolves as bus 0 regardless of the 'bus' field below, matching the physical bench setup (one board's chip(s) wired up at a time, no I2C mux built yet). Different boards below share real addresses on purpose -- harmless in test mode since they're never live simultaneously. Switch to 'prod' once the mux exists and boards are wired at their real site addresses for good.",
+    "'bus' values for Fossli Motors Hoyre/Venstre (2) come from PLAN_Phase1.md's earlier site-map table, not restated by the site owner in the message this file was built from. 'bus' for the other 6 boards is exactly what the site owner stated. Note: that same earlier table had Sidespor on bus 3, but the site owner's fresh statement says bus 0 -- trusting the fresh statement, flagging the discrepancy here rather than silently resolving it.",
+    "Switches are only known for Fossli Motors Hoyre (\"1\",\"3\",\"5/6\",\"7\") and Fossli Motors Venstre (\"101\",\"2\",\"4\") -- the other 5 SCB/Combined boards' switches, motorBitFirst, dreieskive, and statusLedBit are all genuinely unknown, left null/empty rather than guessed. The site owner said these come later.",
+    "'All but one of the SCB-capable boards have the active status LED' per the site owner -- which one lacks it is not yet known, so statusLedBit is only populated for Fossli Motors Hoyre/Venstre (both bit 7, matching what's already built and tested) and left null everywhere else.",
+    "Havna Stillverk and Fossli Stillverk (SVB category) are declared here for visibility only -- no SVB panel-switch scanning/command functionality exists yet, so BoardConfig.Load() doesn't consume these into anything functional.",
+    "Vallekilen Stillverk is Combined (drives 2 motors + reads panel switches on one board) -- per the site owner, represented as one vaddr, declared once here with category Combined. It's consumed into BoardScb (so it'll show up in Motor Scan/Command Mode once its switches are known) but has no SVB-side functional support either, same as the pure SVB boards above.",
+    "Fossli Motors Venstre corrected a second time: motor and signal bits are NOT consecutive ranges on this board (discovered when firing 'motor bit 0' during Motor Scan lit a signal lamp instead of moving anything) -- motors and signals are interleaved on Port B (motors 1,3,5; signals 0,2,4). This is why motorBits/signalBits exist as explicit per-bit lists rather than a single 'first' value -- motorBitFirst/signalBitFirst alone can't represent an interleaved layout. Status LED moved 7->6, inverter-enable moved Port A bit 6->7 (swapped with track detection, which is now bit 6). EEPROM for this board holds data scanned under the OLD (wrong) declaration and needs re-scanning: re-upload hardware.json, re-run Motor Scan (choose Overwrite), re-run Signal Scan, re-run Track Detection with bit 6."
+  ],
+  "addressMode": "test",
+  "svb": {
+    "name": "Fossli",
+    "number": 1
+  },
+  "boards": [
+    {
+      "name": "Fossli Motors Hoyre",
+      "category": "SCB",
+      "bus": 2,
+      "chips": ["0x20"],
+      "motorBitFirst": 0,
+      "switches": ["1", "3", "5/6", "7"],
+      "dreieskive": { "base": 4, "upper": 5 },
+      "statusLedBit": 7
+    },
+    {
+      "name": "Fossli Motors Venstre",
+      "category": "SCB",
+      "bus": 2,
+      "chips": ["0x21"],
+      "motorBits": [1, 3, 5],
+      "switches": ["101", "2", "4"],
+      "dreieskive": null,
+      "statusLedBit": 6,
+      "inverterEnable": { "port": "A", "bit": 7 },
+      "signalBits": [0, 2, 4]
+    },
+    {
+      "name": "Sidespor Motors",
+      "category": "SCB",
+      "bus": 0,
+      "chips": ["0x24"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    },
+    {
+      "name": "Havna Motors",
+      "category": "SCB",
+      "bus": 1,
+      "chips": ["0x20", "0x21"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    },
+    {
+      "name": "Vallekilen Motors",
+      "category": "SCB",
+      "bus": 1,
+      "chips": ["0x22"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    },
+    {
+      "name": "Havna Stillverk",
+      "category": "SVB",
+      "bus": 0,
+      "chips": ["0x22", "0x23"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    },
+    {
+      "name": "Fossli Stillverk",
+      "category": "SVB",
+      "bus": 0,
+      "chips": ["0x20", "0x21"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    },
+    {
+      "name": "Vallekilen Stillverk",
+      "category": "Combined",
+      "bus": 1,
+      "chips": ["0x23"],
+      "motorBitFirst": null,
+      "switches": [],
+      "dreieskive": null,
+      "statusLedBit": null
+    }
+  ]
+}

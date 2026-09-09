@@ -39,17 +39,17 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 #define EEPROM_MAGIC_ADDR   0x01
 #define EEPROM_MAGIC_VALUE  0xA5
 
-// Fixed board facts: dreieskive motor side + status LED (declared, not scanned)
+// Fixed board fact: dreieskive motor side (declared, not scanned). There is
+// exactly one dreieskive for the whole site (FCSBR only) -- unlike the status
+// LED below, this stays a single slot, not one per board.
 #define ADDR_DREI_VADDR     0x02
 #define ADDR_DREI_PINBASE   0x03
 #define ADDR_DREI_CWPOL     0x04
-#define ADDR_LED_VADDR      0x05
-#define ADDR_LED_BIT        0x06
 
-// Fade config: fixed timing parameters for the (not yet built) signal-lamp fade loop
-#define ADDR_FADE_MS        0x07   // uint16, 2 bytes
-#define ADDR_FADE_STEPS     0x09   // uint8
-#define ADDR_FADE_PWMUS     0x0A   // uint16, 2 bytes
+// 0x07-0x0B previously held digital-fade timing (fadeMs/fadeSteps/pwmPeriodUs)
+// for the software-PWM signal-lamp fade loop -- removed, signal fading is
+// analog on the board now, not something firmware ever needs to drive.
+// Left unused rather than reclaimed, no reason to renumber everything below.
 
 // Switch table — 32-slot capacity
 #define SWITCH_CAP           32
@@ -76,7 +76,37 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 #define REGION_SVBSW_TGTDREI 0x180 // SvbSwTargetIsDreieskive[32]
 #define REGION_SVBSW_TGTSLOT 0x1A0 // SvbSwTargetSlot[32]
 
-#define EEPROM_ERASE_END     0x1BF // EC clears 0x02..0x1BF plus the magic byte
+// Status LED — one per board, indexed by the SAME slot the board hardware
+// table (REGION_BOARD_*) assigns that board's vaddr (via board_find_slot()).
+// Was a single slot (0x05/0x06) until FCSBL showed up with its own status
+// LED distinct from FCSBR's. No separate VAddr array needed -- the vaddr for
+// slot N is already BoardVAddr[N]; storing it again here would just be a
+// duplicate of that value.
+#define REGION_LED_BIT       0x1C0 // StatusLedBit[BOARD_CAP] -- 0xFF = no LED for this board slot
+
+// Signal lamp group — 3 bits (Red/Green1/Green2) per board, same board-slot
+// indexing as the status LED above (via board_find_slot()). 0xFF in
+// SignalRed = no signal for this board slot (Green1/Green2 unused then).
+#define REGION_SIGNAL_RED    0x1D0 // SignalRedBit[BOARD_CAP]
+#define REGION_SIGNAL_GREEN1 0x1E0 // SignalGreen1Bit[BOARD_CAP]
+#define REGION_SIGNAL_GREEN2 0x1F0 // SignalGreen2Bit[BOARD_CAP]
+
+// Inverter enable — some one-bit-drive boards need an external inverter
+// (the one that produces the H-bridge's second line from a single MCU bit)
+// actively enabled after bring-up, unlike the always-on inverter variant.
+// Per board-slot, same board_find_slot() indexing as above. Port: 0=A, 1=B
+// (matches MDIR/MW's isB convention elsewhere in this file). 0xFF in Port =
+// no inverter-enable pin for this board slot.
+#define REGION_INVENA_PORT   0x200 // InverterEnablePort[BOARD_CAP]
+#define REGION_INVENA_BIT    0x210 // InverterEnableBit[BOARD_CAP]
+
+// Track detection — one input bit per board-slot (is a train present).
+// ActiveHigh: 1 = high means train present, 0 = low means train present,
+// 0xFF = unset. 0xFF in Bit = no track detection for this board slot.
+#define REGION_TRACK_BIT       0x220 // TrackDetectBit[BOARD_CAP]
+#define REGION_TRACK_ACTIVEHI  0x230 // TrackDetectActiveHigh[BOARD_CAP]
+
+#define EEPROM_ERASE_END     0x23F // EC clears 0x02..0x23F plus the magic byte
 
 // ---------------------------------------------------------------------------
 // MCP23017 register addresses
@@ -229,6 +259,26 @@ static void apply_board_hw(uint8_t slot) {
     mcp_write_reg(vaddr, MCP_GPPUB,  gppuB,  &okFlag);
     mcp_write_reg(vaddr, MCP_OLATA,  0x00,   &okFlag); // universal safe default
     mcp_write_reg(vaddr, MCP_OLATB,  0x00,   &okFlag); // (see PLAN_Phase1.md)
+
+    // Inverter enable: some one-bit-drive boards need an external inverter
+    // actively enabled after bring-up (see PLAN_Phase3.md, "Motor drive").
+    // Its pin starts as input (matches hardware.json's declared state, same
+    // as the chip's own power-on default) and only becomes an output here,
+    // at/after the OLAT=0x00 safe-default writes above -- timed this way on
+    // purpose, per the site owner's explicit sequencing, not folded into the
+    // initial IODIR write above (which would make it an output far too
+    // early, before Port B's motor lines are confirmed safe).
+    uint8_t invPort = EEPROM.read(REGION_INVENA_PORT + slot);
+    if (invPort != 0xFF) {
+        uint8_t invBit = EEPROM.read(REGION_INVENA_BIT + slot);
+        if (invPort == 0) { // Port A
+            iodirA &= (uint8_t)~(1 << invBit);
+            mcp_write_reg(vaddr, MCP_IODIRA, iodirA, &okFlag); // OLATA already 0 above -- enables (drives low)
+        } else { // Port B
+            iodirB &= (uint8_t)~(1 << invBit);
+            mcp_write_reg(vaddr, MCP_IODIRB, iodirB, &okFlag); // OLATB already 0 above
+        }
+    }
 }
 
 static void apply_all_board_hw() {
@@ -570,22 +620,62 @@ static void cmdSCU() {
                 !parseHex(strtok(nullptr, " "), &bit)) {
                 Serial.println(F("ERR parse")); okAll = false; break;
             }
-            EEPROM.update(ADDR_LED_VADDR, (uint8_t)va);
-            EEPROM.update(ADDR_LED_BIT,   (uint8_t)bit);
+            uint8_t slot;
+            if (!board_find_slot((uint8_t)va, &slot)) {
+                Serial.println(F("ERR board not in hardware table -- upload hardware.json first"));
+                okAll = false; break;
+            }
+            EEPROM.update(REGION_LED_BIT + slot, (uint8_t)bit);
             Serial.println(F("OK"));
         }
-        else if (strcmp_P(tag, PSTR("F")) == 0) {
-            uint16_t fms, fst, pwm;
-            if (!parseHex(strtok(nullptr, " "), &fms) ||
-                !parseHex(strtok(nullptr, " "), &fst) ||
-                !parseHex(strtok(nullptr, " "), &pwm)) {
+        else if (strcmp_P(tag, PSTR("G")) == 0) {
+            uint16_t va, red, g1, g2;
+            if (!parseHex(strtok(nullptr, " "), &va) ||
+                !parseHex(strtok(nullptr, " "), &red) ||
+                !parseHex(strtok(nullptr, " "), &g1) ||
+                !parseHex(strtok(nullptr, " "), &g2)) {
                 Serial.println(F("ERR parse")); okAll = false; break;
             }
-            EEPROM.update(ADDR_FADE_MS,         (uint8_t)(fms >> 8));
-            EEPROM.update(ADDR_FADE_MS + 1,     (uint8_t)(fms & 0xFF));
-            EEPROM.update(ADDR_FADE_STEPS,      (uint8_t)fst);
-            EEPROM.update(ADDR_FADE_PWMUS,      (uint8_t)(pwm >> 8));
-            EEPROM.update(ADDR_FADE_PWMUS + 1,  (uint8_t)(pwm & 0xFF));
+            uint8_t slot;
+            if (!board_find_slot((uint8_t)va, &slot)) {
+                Serial.println(F("ERR board not in hardware table -- upload hardware.json first"));
+                okAll = false; break;
+            }
+            EEPROM.update(REGION_SIGNAL_RED    + slot, (uint8_t)red);
+            EEPROM.update(REGION_SIGNAL_GREEN1 + slot, (uint8_t)g1);
+            EEPROM.update(REGION_SIGNAL_GREEN2 + slot, (uint8_t)g2);
+            Serial.println(F("OK"));
+        }
+        else if (strcmp_P(tag, PSTR("V")) == 0) {
+            uint16_t va, bit; uint8_t isB;
+            if (!parseHex(strtok(nullptr, " "), &va) ||
+                !parsePort(strtok(nullptr, " "), &isB) ||
+                !parseUint(strtok(nullptr, " "), &bit) || bit > 7) {
+                Serial.println(F("ERR parse")); okAll = false; break;
+            }
+            uint8_t slot;
+            if (!board_find_slot((uint8_t)va, &slot)) {
+                Serial.println(F("ERR board not in hardware table -- upload hardware.json first"));
+                okAll = false; break;
+            }
+            EEPROM.update(REGION_INVENA_PORT + slot, isB);
+            EEPROM.update(REGION_INVENA_BIT  + slot, (uint8_t)bit);
+            Serial.println(F("OK"));
+        }
+        else if (strcmp_P(tag, PSTR("T")) == 0) {
+            uint16_t va, bit, activeHigh;
+            if (!parseHex(strtok(nullptr, " "), &va) ||
+                !parseUint(strtok(nullptr, " "), &bit) || bit > 7 ||
+                !parseHex(strtok(nullptr, " "), &activeHigh)) {
+                Serial.println(F("ERR parse")); okAll = false; break;
+            }
+            uint8_t slot;
+            if (!board_find_slot((uint8_t)va, &slot)) {
+                Serial.println(F("ERR board not in hardware table -- upload hardware.json first"));
+                okAll = false; break;
+            }
+            EEPROM.update(REGION_TRACK_BIT      + slot, (uint8_t)bit);
+            EEPROM.update(REGION_TRACK_ACTIVEHI + slot, (uint8_t)activeHigh);
             Serial.println(F("OK"));
         }
         else {
@@ -629,18 +719,39 @@ static void cmdSCD() {
             dv, EEPROM.read(ADDR_DREI_PINBASE), EEPROM.read(ADDR_DREI_CWPOL));
         Serial.println(buf);
     }
-    uint8_t lv = EEPROM.read(ADDR_LED_VADDR);
-    if (lv != 0xFF) {
+    for (uint8_t slot = 0; slot < BOARD_CAP; slot++) {
+        uint8_t bv = EEPROM.read(REGION_BOARD_VADDR + slot);
+        uint8_t lb = EEPROM.read(REGION_LED_BIT + slot);
+        if (bv == 0xFF || lb == 0xFF) continue;
         char buf[16];
-        snprintf(buf, sizeof(buf), "L %02X %02X", lv, EEPROM.read(ADDR_LED_BIT));
+        snprintf(buf, sizeof(buf), "L %02X %02X", bv, lb);
         Serial.println(buf);
     }
-    {
-        uint16_t fms = ((uint16_t)EEPROM.read(ADDR_FADE_MS) << 8)     | EEPROM.read(ADDR_FADE_MS + 1);
-        uint8_t  fst = EEPROM.read(ADDR_FADE_STEPS);
-        uint16_t pwm = ((uint16_t)EEPROM.read(ADDR_FADE_PWMUS) << 8)  | EEPROM.read(ADDR_FADE_PWMUS + 1);
+    for (uint8_t slot = 0; slot < BOARD_CAP; slot++) {
+        uint8_t bv = EEPROM.read(REGION_BOARD_VADDR + slot);
+        uint8_t red = EEPROM.read(REGION_SIGNAL_RED + slot);
+        if (bv == 0xFF || red == 0xFF) continue;
         char buf[24];
-        snprintf(buf, sizeof(buf), "F %04X %02X %04X", fms, fst, pwm);
+        snprintf(buf, sizeof(buf), "G %02X %02X %02X %02X",
+            bv, red, EEPROM.read(REGION_SIGNAL_GREEN1 + slot), EEPROM.read(REGION_SIGNAL_GREEN2 + slot));
+        Serial.println(buf);
+    }
+    for (uint8_t slot = 0; slot < BOARD_CAP; slot++) {
+        uint8_t bv = EEPROM.read(REGION_BOARD_VADDR + slot);
+        uint8_t invPort = EEPROM.read(REGION_INVENA_PORT + slot);
+        if (bv == 0xFF || invPort == 0xFF) continue;
+        char buf[24];
+        snprintf(buf, sizeof(buf), "V %02X %c %02X",
+            bv, invPort ? 'B' : 'A', EEPROM.read(REGION_INVENA_BIT + slot));
+        Serial.println(buf);
+    }
+    for (uint8_t slot = 0; slot < BOARD_CAP; slot++) {
+        uint8_t bv = EEPROM.read(REGION_BOARD_VADDR + slot);
+        uint8_t trackBit = EEPROM.read(REGION_TRACK_BIT + slot);
+        if (bv == 0xFF || trackBit == 0xFF) continue;
+        char buf[24];
+        snprintf(buf, sizeof(buf), "T %02X %02X %02X",
+            bv, trackBit, EEPROM.read(REGION_TRACK_ACTIVEHI + slot));
         Serial.println(buf);
     }
     Serial.println(F("END"));

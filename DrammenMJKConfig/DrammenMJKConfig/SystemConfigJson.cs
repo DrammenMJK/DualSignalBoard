@@ -38,6 +38,12 @@ static class SystemConfigJson
 
     static string HexStr(string wireToken) => $"0x{Convert.ToByte(wireToken, 16):X2}";
 
+    // Shared by L (status LED) and G (signal) download handling -- both key
+    // their SystemConfig.json entry by board name, resolved from the wire
+    // line's vaddr via BoardConfig, same as HWD's board rows do implicitly.
+    static string? BoardNameForVAddr(byte vaddr) =>
+        BoardConfig.Svb.Scbs.FirstOrDefault(b => b.VirtualAddress == vaddr)?.Name;
+
     public static List<string> BuildUploadLines(SystemConfigFile file, out int switchCount, out int svbSwitchCount)
     {
         var lines = new List<string>();
@@ -73,10 +79,29 @@ static class SystemConfigJson
             lines.Add($"D {Hex(file.Dreieskive.MotorVAddr)} {file.Dreieskive.MotorPinBase ?? 0:X2} {cwPol:X2}");
         }
 
-        if (file.StatusLed.VAddr != null)
-            lines.Add($"L {Hex(file.StatusLed.VAddr)} {file.StatusLed.Bit ?? 0:X2}");
+        foreach (var led in file.StatusLeds.Values)
+        {
+            if (led.VAddr == null) continue;
+            lines.Add($"L {Hex(led.VAddr)} {led.Bit ?? 0:X2}");
+        }
 
-        lines.Add($"F {file.FadeConfig.FadeMs:X4} {file.FadeConfig.FadeSteps:X2} {file.FadeConfig.PwmPeriodUs:X4}");
+        foreach (var signal in file.Signals.Values)
+        {
+            if (signal.VAddr == null) continue;
+            lines.Add($"G {Hex(signal.VAddr)} {signal.RedBit ?? 0:X2} {signal.Green1Bit ?? 0:X2} {signal.Green2Bit ?? 0:X2}");
+        }
+
+        foreach (var inv in file.InverterEnables.Values)
+        {
+            if (inv.VAddr == null) continue;
+            lines.Add($"V {Hex(inv.VAddr)} {inv.Port ?? "A"} {inv.Bit ?? 0:X2}");
+        }
+
+        foreach (var track in file.TrackDetections.Values)
+        {
+            if (track.VAddr == null) continue;
+            lines.Add($"T {Hex(track.VAddr)} {track.Bit ?? 0:X2} {(track.ActiveHigh == true ? 1 : 0):X2}");
+        }
 
         return lines;
     }
@@ -138,20 +163,53 @@ static class SystemConfigJson
                         };
                         break;
                     case "L" when parts.Length == 3:
-                        file.StatusLed = new StatusLedEntry
+                    {
+                        string? boardName = BoardNameForVAddr(Convert.ToByte(parts[1], 16));
+                        if (boardName == null) break; // vaddr not in BoardConfig -- nowhere to key this by name
+                        file.StatusLeds[boardName] = new StatusLedEntry
                         {
                             VAddr = HexStr(parts[1]),
                             Bit = Convert.ToInt32(parts[2], 16),
                         };
                         break;
-                    case "F" when parts.Length == 4:
-                        file.FadeConfig = new FadeConfigEntry
+                    }
+                    case "G" when parts.Length == 5:
+                    {
+                        string? boardName = BoardNameForVAddr(Convert.ToByte(parts[1], 16));
+                        if (boardName == null) break;
+                        file.Signals[boardName] = new SignalEntry
                         {
-                            FadeMs = Convert.ToInt32(parts[1], 16),
-                            FadeSteps = Convert.ToInt32(parts[2], 16),
-                            PwmPeriodUs = Convert.ToInt32(parts[3], 16),
+                            VAddr = HexStr(parts[1]),
+                            RedBit = Convert.ToInt32(parts[2], 16),
+                            Green1Bit = Convert.ToInt32(parts[3], 16),
+                            Green2Bit = Convert.ToInt32(parts[4], 16),
                         };
                         break;
+                    }
+                    case "V" when parts.Length == 4:
+                    {
+                        string? boardName = BoardNameForVAddr(Convert.ToByte(parts[1], 16));
+                        if (boardName == null) break;
+                        file.InverterEnables[boardName] = new InverterEnableEntry
+                        {
+                            VAddr = HexStr(parts[1]),
+                            Port = parts[2],
+                            Bit = Convert.ToInt32(parts[3], 16),
+                        };
+                        break;
+                    }
+                    case "T" when parts.Length == 4:
+                    {
+                        string? boardName = BoardNameForVAddr(Convert.ToByte(parts[1], 16));
+                        if (boardName == null) break;
+                        file.TrackDetections[boardName] = new TrackDetectionEntry
+                        {
+                            VAddr = HexStr(parts[1]),
+                            Bit = Convert.ToInt32(parts[2], 16),
+                            ActiveHigh = parts[3] != "00",
+                        };
+                        break;
+                    }
                 }
             }
             catch (FormatException) { /* skip malformed line */ }

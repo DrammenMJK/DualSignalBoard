@@ -114,16 +114,11 @@ static class StatusSession
               $" cwPol={(file.Dreieskive.CwPolarity is { } cw ? cw.ToString() : "?")}"
             : "  Dreieskive: not configured");
 
-        Console.WriteLine(file.StatusLed.VAddr != null
-            ? $"  Status LED: vaddr={file.StatusLed.VAddr} bit={file.StatusLed.Bit}"
-            : "  Status LED: not configured");
-
-        // Fade config always has firmware-side defaults, but an EEPROM never
-        // written to reads as 0xFF per byte -- distinguish that from a real value.
-        bool fadeUnset = file.FadeConfig.FadeMs == 0xFFFF && file.FadeConfig.PwmPeriodUs == 0xFFFF;
-        Console.WriteLine(fadeUnset
-            ? "  Fade config: not set (EEPROM blank)"
-            : $"  Fade config: {file.FadeConfig.FadeMs}ms / {file.FadeConfig.FadeSteps} steps / {file.FadeConfig.PwmPeriodUs}us PWM period");
+        if (file.StatusLeds.Count == 0)
+            Console.WriteLine("  Status LED: not configured");
+        else
+            foreach (var (boardName, led) in file.StatusLeds)
+                Console.WriteLine($"  Status LED ({boardName}): vaddr={led.VAddr} bit={led.Bit}");
 
         return (file.Switches.Count, allLabels.Count);
     }

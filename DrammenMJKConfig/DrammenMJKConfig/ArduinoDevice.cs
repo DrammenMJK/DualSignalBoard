@@ -13,13 +13,15 @@ sealed class ArduinoDevice
 
     public const byte Unset = 0xFF;
 
-    // EEPROM region addresses (must match Firmware.ino exactly). Fixed board
-    // facts (dreieskive motor side, status LED) — declared, not scanned.
+    // EEPROM region addresses (must match Firmware.ino exactly). Dreieskive
+    // motor side is declared, not scanned, and stays a single global slot --
+    // there's exactly one dreieskive for the whole site (FCSBR only).
     public const int AddrDreieskiveVAddr        = 0x02;
     public const int AddrDreieskiveMotorPinBase = 0x03;
     public const int AddrDreieskiveCwPolarity   = 0x04;
-    public const int AddrStatusLedVAddr         = 0x05;
-    public const int AddrStatusLedBit           = 0x06;
+    // Status LED has no fixed address here -- Firmware.ino resolves it
+    // per-board via board_find_slot(), so it's set through SCU's "L" line
+    // (see SetStatusLed below), not a direct EW write.
 
     // Switch table — 32-slot capacity, parallel byte arrays.
     public const int RegionSlotMotorVAddr    = 0x10;
@@ -216,6 +218,62 @@ sealed class ArduinoDevice
     }
 
     public void SystemConfigUploadAbort() => _conn.StopCapture();
+
+    // Declares one board's status LED (vaddr + bit) via a single-line SCU
+    // session. Firmware resolves which EEPROM slot that is itself via
+    // board_find_slot(vaddr) -- the board must already be in the hardware
+    // table (hardware.json uploaded) or this fails.
+    public bool SetStatusLed(byte vaddr, int bit)
+    {
+        if (!SystemConfigUploadStart()) return false;
+        if (!SystemConfigSendLine($"L {vaddr:X2} {bit:X2}"))
+        {
+            SystemConfigUploadAbort();
+            return false;
+        }
+        return SystemConfigUploadFinish();
+    }
+
+    // Declares one board's signal lamp group (Red/Green1/Green2 bits) via a
+    // single-line SCU session. Same board_find_slot() resolution as
+    // SetStatusLed.
+    public bool SetSignal(byte vaddr, int redBit, int green1Bit, int green2Bit)
+    {
+        if (!SystemConfigUploadStart()) return false;
+        if (!SystemConfigSendLine($"G {vaddr:X2} {redBit:X2} {green1Bit:X2} {green2Bit:X2}"))
+        {
+            SystemConfigUploadAbort();
+            return false;
+        }
+        return SystemConfigUploadFinish();
+    }
+
+    // Declares one board's inverter-enable pin (port + bit) via a
+    // single-line SCU session. Same board_find_slot() resolution as
+    // SetStatusLed/SetSignal.
+    public bool SetInverterEnable(byte vaddr, char port, int bit)
+    {
+        if (!SystemConfigUploadStart()) return false;
+        if (!SystemConfigSendLine($"V {vaddr:X2} {port} {bit:X2}"))
+        {
+            SystemConfigUploadAbort();
+            return false;
+        }
+        return SystemConfigUploadFinish();
+    }
+
+    // Declares one board's track detection input (bit + active level) via a
+    // single-line SCU session. Same board_find_slot() resolution as above.
+    public bool SetTrackDetection(byte vaddr, int bit, bool activeHigh)
+    {
+        if (!SystemConfigUploadStart()) return false;
+        if (!SystemConfigSendLine($"T {vaddr:X2} {bit:X2} {(activeHigh ? 1 : 0):X2}"))
+        {
+            SystemConfigUploadAbort();
+            return false;
+        }
+        return SystemConfigUploadFinish();
+    }
 
     public bool SystemConfigDownloadStart()
     {

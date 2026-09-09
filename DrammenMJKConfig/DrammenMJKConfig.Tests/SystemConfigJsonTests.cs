@@ -2,6 +2,9 @@ namespace DrammenMJKConfig.Tests;
 
 public class SystemConfigJsonTests
 {
+    [SetUp]
+    public void Setup() => TestBoardsFixture.Apply();
+
     static SystemConfigFile BuildFullyConfiguredFile()
     {
         var file = new SystemConfigFile { Site = "Fossli", Svb = "Fossli" };
@@ -10,8 +13,7 @@ public class SystemConfigJsonTests
         file.Switches["5/6"] = new SwitchEntry { MotorVAddr = "0x20", MotorBit = 2, Polarity = 0, FeedbackVAddr = "0x20", FeedbackRettBit = 4, FeedbackAvvikBit = 5 };
         file.Switches["7"]   = new SwitchEntry { MotorVAddr = "0x20", MotorBit = 3, Polarity = 0, FeedbackVAddr = "0x20", FeedbackRettBit = 6, FeedbackAvvikBit = 7 };
         file.Dreieskive = new DreieskiveEntry { MotorVAddr = "0x20", MotorPinBase = 4, CwPolarity = null };
-        file.StatusLed = new StatusLedEntry { VAddr = "0x20", Bit = 7 };
-        file.FadeConfig = new FadeConfigEntry { FadeMs = 1000, FadeSteps = 60, PwmPeriodUs = 1000 };
+        file.StatusLeds["Fossli Motors Hoyre"] = new StatusLedEntry { VAddr = "0x20", Bit = 7 };
         return file;
     }
 
@@ -66,17 +68,6 @@ public class SystemConfigJsonTests
     }
 
     [Test]
-    public void BuildUploadLines_FadeConfigLine_UsesFourHexDigitsForSixteenBitFields()
-    {
-        var file = BuildFullyConfiguredFile();
-
-        var lines = SystemConfigJson.BuildUploadLines(file, out _, out _);
-
-        // FadeMs/PwmPeriodUs are 16-bit (1000 doesn't fit one byte) -- 4 hex digits, not 2.
-        Assert.That(lines, Has.Some.EqualTo("F 03E8 3C 03E8"));
-    }
-
-    [Test]
     public void ApplyDownloadLines_SLine_MapsSlotBackToCorrectLabelViaBoardConfig()
     {
         var file = new SystemConfigFile();
@@ -104,15 +95,79 @@ public class SystemConfigJsonTests
     }
 
     [Test]
-    public void ApplyDownloadLines_FLine_PopulatesFadeConfig()
+    public void ApplyDownloadLines_LLine_KeysStatusLedByBoardNameViaVAddr()
     {
         var file = new SystemConfigFile();
 
-        SystemConfigJson.ApplyDownloadLines(file, ["F 03E8 3C 03E8"]);
+        SystemConfigJson.ApplyDownloadLines(file, ["L 21 07"]); // Fossli Motors Venstre's vaddr
 
-        Assert.That(file.FadeConfig.FadeMs, Is.EqualTo(1000));
-        Assert.That(file.FadeConfig.FadeSteps, Is.EqualTo(60));
-        Assert.That(file.FadeConfig.PwmPeriodUs, Is.EqualTo(1000));
+        Assert.That(file.StatusLeds.ContainsKey("Fossli Motors Venstre"), Is.True);
+        var led = file.StatusLeds["Fossli Motors Venstre"];
+        Assert.That(led.VAddr, Is.EqualTo("0x21"));
+        Assert.That(led.Bit, Is.EqualTo(7));
+    }
+
+    [Test]
+    public void BuildUploadLines_MultipleStatusLeds_ProducesOneLLinePerBoard()
+    {
+        var file = BuildFullyConfiguredFile();
+        file.StatusLeds["Fossli Motors Venstre"] = new StatusLedEntry { VAddr = "0x21", Bit = 7 };
+
+        var lines = SystemConfigJson.BuildUploadLines(file, out _, out _);
+
+        var lLines = lines.Where(l => l.StartsWith("L ")).ToList();
+        Assert.That(lLines, Has.Count.EqualTo(2));
+        Assert.That(lLines, Has.Some.EqualTo("L 20 07"));
+        Assert.That(lLines, Has.Some.EqualTo("L 21 07"));
+    }
+
+    [Test]
+    public void BuildUploadLines_InverterEnableLine_MatchesConfiguredPortAndBit()
+    {
+        var file = BuildFullyConfiguredFile();
+        file.InverterEnables["Fossli Motors Venstre"] = new InverterEnableEntry { VAddr = "0x21", Port = "A", Bit = 6 };
+
+        var lines = SystemConfigJson.BuildUploadLines(file, out _, out _);
+
+        Assert.That(lines, Has.Some.EqualTo("V 21 A 06"));
+    }
+
+    [Test]
+    public void ApplyDownloadLines_VLine_KeysInverterEnableByBoardNameViaVAddr()
+    {
+        var file = new SystemConfigFile();
+
+        SystemConfigJson.ApplyDownloadLines(file, ["V 21 A 06"]);
+
+        Assert.That(file.InverterEnables.ContainsKey("Fossli Motors Venstre"), Is.True);
+        var inv = file.InverterEnables["Fossli Motors Venstre"];
+        Assert.That(inv.VAddr, Is.EqualTo("0x21"));
+        Assert.That(inv.Port, Is.EqualTo("A"));
+        Assert.That(inv.Bit, Is.EqualTo(6));
+    }
+
+    [Test]
+    public void BuildUploadLines_TrackDetectionLine_EncodesActiveHighAsOneOrZero()
+    {
+        var file = BuildFullyConfiguredFile();
+        file.TrackDetections["Fossli Motors Venstre"] = new TrackDetectionEntry { VAddr = "0x21", Bit = 7, ActiveHigh = true };
+
+        var lines = SystemConfigJson.BuildUploadLines(file, out _, out _);
+
+        Assert.That(lines, Has.Some.EqualTo("T 21 07 01"));
+    }
+
+    [TestCase("00", false)]
+    [TestCase("01", true)]
+    public void ApplyDownloadLines_TLine_ParsesActiveHigh(string wireValue, bool expectedActiveHigh)
+    {
+        var file = new SystemConfigFile();
+
+        SystemConfigJson.ApplyDownloadLines(file, [$"T 21 07 {wireValue}"]);
+
+        var track = file.TrackDetections["Fossli Motors Venstre"];
+        Assert.That(track.Bit, Is.EqualTo(7));
+        Assert.That(track.ActiveHigh, Is.EqualTo(expectedActiveHigh));
     }
 
     [Test]
@@ -145,7 +200,41 @@ public class SystemConfigJsonTests
 
             Assert.That(reloaded.Site, Is.EqualTo("Fossli"));
             Assert.That(reloaded.Switches, Has.Count.EqualTo(4));
-            Assert.That(reloaded.FadeConfig.FadeSteps, Is.EqualTo(60));
+        }
+        finally { File.Delete(path); }
+    }
+
+    // Regression coverage for a real incident: StatusLed/Signal/TrackDetection/
+    // InverterEnable all moved from single objects to Dictionary<string, T>
+    // (one per board) while keeping the same JSON key names. A real
+    // SystemConfig.json on disk from before that change still had the old
+    // single-object shape for fields a later save hadn't rewritten yet, and
+    // deserializing an object where a dictionary was expected threw
+    // JsonException at startup. That specific file was fixed by hand (not
+    // something this code migrates automatically) -- what IS a real,
+    // supported case is a file that predates these fields existing at all,
+    // which must still load cleanly with empty dictionaries rather than throw.
+    [Test]
+    public void Load_FileMissingNewerDictionaryFields_LoadsWithEmptyDictionariesNotThrowing()
+    {
+        string path = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(path, """
+                {
+                  "site": "Fossli",
+                  "svb": "Fossli",
+                  "switches": {}
+                }
+                """);
+
+            SystemConfigFile? file = null;
+            Assert.DoesNotThrow(() => file = SystemConfigJson.Load(path));
+
+            Assert.That(file!.StatusLeds, Is.Empty);
+            Assert.That(file.Signals, Is.Empty);
+            Assert.That(file.TrackDetections, Is.Empty);
+            Assert.That(file.InverterEnables, Is.Empty);
         }
         finally { File.Delete(path); }
     }

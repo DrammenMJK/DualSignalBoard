@@ -12,13 +12,13 @@ static class SystemConfigSession
     public static void Run(ArduinoDevice arduino)
     {
         Console.WriteLine();
-        Console.WriteLine("--- System config (SystemConfig.json) ---");
+        Console.WriteLine("--- System Config Backup (SystemConfig.json) ---");
         Console.WriteLine("Discovered switch wiring, dreieskive, status LED, fade config.");
 
         new Menu(
             [
-                ('U', "Upload SystemConfig.json to Arduino", () => Upload(arduino)),
-                ('D', "Download from Arduino to SystemConfig.json", () => Download(arduino)),
+                ('U', "Restore — upload SystemConfig.json to Arduino", () => Upload(arduino)),
+                ('D', "Backup — download from Arduino to SystemConfig.json", () => Download(arduino)),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -37,11 +37,41 @@ static class SystemConfigSession
         SystemConfigJson.Save(file, path);
     }
 
-    // Called once at the start of a Motor Scan session -- declared, not scanned.
-    public static void SaveDreieskiveAndLed(SystemConfigFile file, DreieskiveEntry drei, StatusLedEntry led, string path = DefaultPath)
+    // Called once at the start of a Motor Scan session, only for the board
+    // that actually owns the site's one dreieskive (declared, not scanned).
+    public static void SaveDreieskive(SystemConfigFile file, DreieskiveEntry drei, string path = DefaultPath)
     {
         file.Dreieskive = drei;
-        file.StatusLed = led;
+        SystemConfigJson.Save(file, path);
+    }
+
+    // Called once at the start of a Motor Scan session for whichever board is
+    // being scanned -- every board has its own status LED, keyed by name.
+    public static void SaveStatusLed(SystemConfigFile file, string boardName, StatusLedEntry led, string path = DefaultPath)
+    {
+        file.StatusLeds[boardName] = led;
+        SystemConfigJson.Save(file, path);
+    }
+
+    // Called once at the start of a Motor Scan session, for boards that
+    // declare an inverter-enable pin in boards.json.
+    public static void SaveInverterEnable(SystemConfigFile file, string boardName, InverterEnableEntry entry, string path = DefaultPath)
+    {
+        file.InverterEnables[boardName] = entry;
+        SystemConfigJson.Save(file, path);
+    }
+
+    // Called by Signal Scan once a board's signal lamp bits are confirmed.
+    public static void SaveSignal(SystemConfigFile file, string boardName, SignalEntry signal, string path = DefaultPath)
+    {
+        file.Signals[boardName] = signal;
+        SystemConfigJson.Save(file, path);
+    }
+
+    // Called by Track Detection Scan once a board's polarity is confirmed.
+    public static void SaveTrackDetection(SystemConfigFile file, string boardName, TrackDetectionEntry entry, string path = DefaultPath)
+    {
+        file.TrackDetections[boardName] = entry;
         SystemConfigJson.Save(file, path);
     }
 

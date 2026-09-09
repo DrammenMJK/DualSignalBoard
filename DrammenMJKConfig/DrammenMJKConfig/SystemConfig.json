@@ -1,10 +1,11 @@
 {
   "_todo": [
-    "FCSBL\u0027s switch labels are now known: 101, 2, 4 (matching the older letter-based system\u0027s Pens B, C, D at Fossli). Not yet in the switches section below -- that section means \u0027discovered wiring\u0027, and only the labels are known so far, not which of motor bits 0,1,2 is which. A Motor-Scan-style pass (fire each bit, ask the operator which switch moved) is what fills that in, same process as FCSBR; the physical facts needed to run that scan (motor bits 0,1,2 on vaddr 0x21; feedback pairs (0,1)/(2,3)/(4,5) on the same chip) are already known from hardware.json.",
-    "FCSBL drives one signal (3 lamps: Red, Green1, Green2) on Port B bits 4,5,6 -- range now known, but which specific bit is which color is not. The doc also says \u0027we have two of these, so they should be numbered\u0027 -- Fossli has 2 signals station-wide (mirroring the original DualSignal\u0027s Signal A/B), but only one is confirmed to be on FCSBL. Where the second signal lives is not yet stated; only one signals entry is populated below.",
-    "Signal numbering is explicitly deferred in PlanExtended.md (\u0027The letters we use there is now converted to numbers. Will come back to that.\u0027) -- the signals section below stays structurally unconfigured even though the candidate bits are known.",
-    "Track detection is now known to be Port A bit 7 on 0x21 (below). Its polarity (which level = train present) still needs configuring -- same as the old DualSignal system\u0027s active-HIGH Train input, which was the one input that didn\u0027t follow the usual active-low convention.",
-    "fadeConfig values are the original SignalLys_2X_Momentbrytere.ino defaults (FadeMs=1000, FadeSteps=60, PwmPeriodUs=1000), ported as-is rather than recomputed. Unlike the original\u0027s hardcoded static const, these are now genuine config -- editable here without a firmware recompile -- but nobody has had a reason to change them yet, so they stay at the values already proven on the original hardware."
+    "FCSBL's switch labels are now known: 101, 2, 4 (matching the older letter-based system's Pens B, C, D at Fossli). Not yet in the switches section below -- that section means 'discovered wiring', and only the labels are known so far, not which of motor bits 0,1,2 is which. A Motor-Scan-style pass (fire each bit, ask the operator which switch moved) is what fills that in, same process as FCSBR; the physical facts needed to run that scan (motor bits 0,1,2 on vaddr 0x21; feedback pairs (0,1)/(2,3)/(4,5) on the same chip) are already known from hardware.json.",
+    "FCSBL drives one signal (3 lamps: Red, Green1, Green2) on Port B bits 0,2,4 (interleaved with the motor bits, corrected from an earlier statement of consecutive bits 4,5,6). Which specific bit is which color is discovered via Config menu 2 (Signal Scan).",
+    "Signal numbering is explicitly deferred in PlanExtended.md ('The letters we use there is now converted to numbers. Will come back to that.') -- the signals section below stays structurally unconfigured even though the candidate bits are known.",
+    "Track detection is now known to be Port A bit 6 on 0x21 (corrected from an earlier statement of bit 7, which was also swapped with inverter-enable). Its polarity (which level = train present) still needs configuring via Config menu 3 (Track Detection).",
+    "fadeConfig removed: it was for the old software-PWM digital signal-lamp fade, superseded now that fading is analog on the board -- firmware never needs to drive it.",
+    "Board names use plain ASCII (Hoyre, not Høyre) -- avoiding æøå/ÆØÅ everywhere on purpose, so nothing here needs \\uXXXX escaping to round-trip."
   ],
   "site": "Fossli",
   "svb": "Fossli",
@@ -47,9 +48,15 @@
     "motorPinBase": 4,
     "cwPolarity": null
   },
-  "statusLed": {
-    "vaddr": "0x20",
-    "bit": 7
+  "statusLeds": {
+    "Fossli Motors Hoyre": {
+      "vaddr": "0x20",
+      "bit": 7
+    },
+    "Fossli Motors Venstre": {
+      "vaddr": "0x21",
+      "bit": 6
+    }
   },
   "svbSwitches": {
     "1": {
@@ -84,21 +91,19 @@
     }
   },
   "signals": {
-    "1": {
+    "Fossli Motors Venstre": {
       "vaddr": "0x21",
-      "redBit": null,
-      "green1Bit": null,
-      "green2Bit": null
+      "redBit": 4,
+      "green1Bit": 2,
+      "green2Bit": 0
     }
   },
-  "trackDetection": {
-    "vaddr": "0x21",
-    "bit": 7,
-    "activeHigh": null
-  },
-  "fadeConfig": {
-    "fadeMs": 1000,
-    "fadeSteps": 60,
-    "pwmPeriodUs": 1000
+  "trackDetection": {},
+  "inverterEnables": {
+    "Fossli Motors Venstre": {
+      "vaddr": "0x21",
+      "port": "A",
+      "bit": 7
+    }
   }
 }

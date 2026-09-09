@@ -2,12 +2,14 @@ using static DrammenMJKConfig.ConfigInputHelpers;
 
 namespace DrammenMJKConfig;
 
-// Operate already-configured switches: pick the board (SCB) first, then the
-// switch number on that board, then R/A -- current position is read and
-// shown before driving. Never touches port/bit/vaddr directly — resolves
-// label -> slot via BoardConfig, then DriveSwitch/ReadSwitch (SW/SR) do all
-// the port/bit/polarity resolution in firmware. See PLAN_Phase1.md, Command
-// mode.
+// Operate a board: pick it (SCB) first, then Motors, Signals, or Status
+// Light, then loop within that section so repeated checks don't need
+// re-navigating each time. Motors never touch port/bit/vaddr directly —
+// resolves label -> slot via BoardConfig, then DriveSwitch/ReadSwitch (SW/SR)
+// do all the port/bit/polarity resolution in firmware. Signals and the
+// status light go through raw McpSetBit instead (see RunSignals/
+// RunStatusLight) -- there's no "drive and wait" concept for a lamp the way
+// there is for a switch motor. See PLAN_Phase1.md, Command mode.
 static class CommandSession
 {
     // Same motor, same ~5s observed travel time as MotorScan's
@@ -19,7 +21,7 @@ static class CommandSession
     {
         Console.WriteLine();
         Console.WriteLine("=== Command Mode ===");
-        Console.WriteLine($"Operate configured switches for SVB {BoardConfig.Svb.Name}.");
+        Console.WriteLine($"Operate SVB {BoardConfig.Svb.Name}.");
         Console.WriteLine("Esc = back.");
         Console.WriteLine();
 
@@ -39,6 +41,30 @@ static class CommandSession
     }
 
     static void RunBoard(ArduinoDevice arduino, BoardScb scb)
+    {
+        while (true)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"{scb.Name}:");
+            Console.WriteLine("  1 = Motors");
+            Console.WriteLine("  2 = Signals");
+            Console.WriteLine("  3 = Status Light");
+            Console.Write("Choice (blank or Esc for board list): ");
+
+            string? input = ReadLineOrEsc();
+            if (input == null) { Console.WriteLine(); return; }
+
+            switch (input)
+            {
+                case "1": RunMotors(arduino, scb); break;
+                case "2": RunSignals(arduino, scb); break;
+                case "3": RunStatusLight(arduino, scb); break;
+                default: Console.WriteLine("  Unknown choice."); break;
+            }
+        }
+    }
+
+    static void RunMotors(ArduinoDevice arduino, BoardScb scb)
     {
         // Switch numbers are typed directly rather than picked from an
         // indexed menu -- "5/6" is two physically-coupled switches sharing
@@ -64,10 +90,10 @@ static class CommandSession
 
             Console.WriteLine();
             Console.WriteLine($"{scb.Name} switches: " + string.Join("  ", listing) + "   (? = not configured)");
-            Console.Write("Switch number (blank for board list): ");
+            Console.Write("Switch number (blank or Esc for board menu): ");
 
-            string? input = Console.ReadLine()?.Trim();
-            if (string.IsNullOrEmpty(input)) { Console.WriteLine(); return; }
+            string? input = ReadLineOrEsc();
+            if (input == null) { Console.WriteLine(); return; }
 
             if (!numberToLabel.TryGetValue(input, out string? label))
             {
@@ -114,6 +140,97 @@ static class CommandSession
             var result = arduino.DriveSwitch(slot, pos, TimeoutMs);
             Console.WriteLine($"Result: {result}");
             Console.WriteLine();
+        }
+    }
+
+    // Sets a board's signal to one of its states directly (raw McpSetBit
+    // writes, like Bench Test -- no EEPROM/SW involvement, since there's no
+    // "drive to state and wait" concept for a lamp the way there is for a
+    // switch motor). Bit assignment comes from SystemConfig.json (Signal
+    // Scan's result), not boards.json -- it was discovered, not declared.
+    // Loops so repeated checks don't need re-entering this section each time.
+    static void RunSignals(ArduinoDevice arduino, BoardScb scb)
+    {
+        var file = SystemConfigSession.LoadOrNew();
+        if (!file.Signals.TryGetValue(scb.Name, out var sig) || sig.VAddr == null)
+        {
+            Console.WriteLine($"  {scb.Name} has no signal configured — run Signal scan first.");
+            Console.WriteLine();
+            return;
+        }
+        byte vaddr = Convert.ToByte(sig.VAddr, 16);
+        int redBit = sig.RedBit ?? 0, green1Bit = sig.Green1Bit ?? 0, green2Bit = sig.Green2Bit ?? 0;
+
+        while (true)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"{scb.Name} signal:");
+            Console.WriteLine("  1 = Allowed to pass -- Rett   (Green)");
+            Console.WriteLine("  2 = Allowed to pass -- Avvik  (Green + Green2)");
+            Console.WriteLine("  3 = Not allowed to pass       (Red)");
+            Console.WriteLine("  4 = All off");
+            Console.Write("Choice (blank or Esc for board menu): ");
+
+            string? input = ReadLineOrEsc();
+            if (input == null) { Console.WriteLine(); return; }
+            if (input is not ("1" or "2" or "3" or "4"))
+            {
+                Console.WriteLine("  Unknown choice.");
+                continue;
+            }
+
+            bool red = input == "3";
+            bool green1 = input is "1" or "2";
+            bool green2 = input == "2";
+            // input == "4" (all off): red/green1/green2 all stay false.
+
+            arduino.McpSetBit(vaddr, 'B', redBit, red);
+            arduino.McpSetBit(vaddr, 'B', green1Bit, green1);
+            arduino.McpSetBit(vaddr, 'B', green2Bit, green2);
+
+            string label = input switch
+            {
+                "1" => "Allowed to pass (Rett) -- Green",
+                "2" => "Allowed to pass (Avvik) -- Green + Green2",
+                "3" => "Not allowed to pass -- Red",
+                _ => "All off",
+            };
+            Console.WriteLine($"  Set: {label}");
+        }
+    }
+
+    // Status LED's vaddr+port+bit come straight from boards.json
+    // (scb.StatusLedPin) -- declared, not discovered, so no SystemConfig.json
+    // lookup needed the way RunSignals needs one for Signal Scan's result.
+    static void RunStatusLight(ArduinoDevice arduino, BoardScb scb)
+    {
+        if (scb.StatusLedPin is not { } led)
+        {
+            Console.WriteLine($"  {scb.Name} has no status LED configured.");
+            Console.WriteLine();
+            return;
+        }
+        byte vaddr = scb.VirtualAddress;
+
+        while (true)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"{scb.Name} status light:");
+            Console.WriteLine("  1 = On");
+            Console.WriteLine("  2 = Off");
+            Console.Write("Choice (blank or Esc for board menu): ");
+
+            string? input = ReadLineOrEsc();
+            if (input == null) { Console.WriteLine(); return; }
+            if (input is not ("1" or "2"))
+            {
+                Console.WriteLine("  Unknown choice.");
+                continue;
+            }
+
+            bool on = input == "1";
+            arduino.McpSetBit(vaddr, led.Port, led.Bit, on);
+            Console.WriteLine($"  Set: {(on ? "On" : "Off")}");
         }
     }
 }

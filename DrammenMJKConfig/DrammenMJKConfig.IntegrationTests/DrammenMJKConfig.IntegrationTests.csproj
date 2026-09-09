@@ -31,4 +31,13 @@
     <ProjectReference Include="..\DrammenMJKConfig\DrammenMJKConfig.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Same file the main project uses (single source of truth): these
+         tests exercise it against real hardware, so it should reflect the
+         real board config, not a synthetic fixture. -->
+    <None Include="..\DrammenMJKConfig\boards.json" Link="boards.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>
