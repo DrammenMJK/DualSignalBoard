@@ -260,25 +260,23 @@ static void apply_board_hw(uint8_t slot) {
     mcp_write_reg(vaddr, MCP_OLATA,  0x00,   &okFlag); // universal safe default
     mcp_write_reg(vaddr, MCP_OLATB,  0x00,   &okFlag); // (see PLAN_Phase1.md)
 
-    // Inverter enable: some one-bit-drive boards need an external inverter
-    // actively enabled after bring-up (see PLAN_Phase3.md, "Motor drive").
-    // Its pin starts as input (matches hardware.json's declared state, same
-    // as the chip's own power-on default) and only becomes an output here,
-    // at/after the OLAT=0x00 safe-default writes above -- timed this way on
-    // purpose, per the site owner's explicit sequencing, not folded into the
-    // initial IODIR write above (which would make it an output far too
-    // early, before Port B's motor lines are confirmed safe).
-    uint8_t invPort = EEPROM.read(REGION_INVENA_PORT + slot);
-    if (invPort != 0xFF) {
-        uint8_t invBit = EEPROM.read(REGION_INVENA_BIT + slot);
-        if (invPort == 0) { // Port A
-            iodirA &= (uint8_t)~(1 << invBit);
-            mcp_write_reg(vaddr, MCP_IODIRA, iodirA, &okFlag); // OLATA already 0 above -- enables (drives low)
-        } else { // Port B
-            iodirB &= (uint8_t)~(1 << invBit);
-            mcp_write_reg(vaddr, MCP_IODIRB, iodirB, &okFlag); // OLATB already 0 above
-        }
-    }
+    // Inverter-enable pins (some one-bit-drive boards need an external
+    // inverter actively enabled after bring-up, see PLAN_Phase3.md, "Motor
+    // drive") are just a plain hardware.json 'out' declaration now, applied
+    // by the IODIRA/IODIRB writes above like any other output -- no special
+    // deferred flip. An earlier version flipped this pin's direction only
+    // AFTER the OLATA/OLATB=0x00 safe-default writes, to guarantee it never
+    // started driving before the motor bits were confirmed zeroed. Dropped
+    // deliberately (site owner's call): the pin is wired so the motor's two
+    // terminals are always hardware-complementary (this bit direct to one
+    // terminal, inverted to the other) -- the only possible effect of a
+    // stale OLAT bit surviving from a prior session is a reversed-direction
+    // pulse lasting a single I2C register write (tens of microseconds), far
+    // too short to produce any mechanical movement on a multi-second switch
+    // throw, and never a same-state short since the terminals can't match
+    // while the inverter is live. REGION_INVENA_PORT/BIT (SCU/SCD 'V') still
+    // exists purely for SystemConfig.json backup/restore visibility -- no
+    // longer consulted here.
 }
 
 static void apply_all_board_hw() {
@@ -397,6 +395,22 @@ static void cmdMR() {
     Serial.println(buf);
 }
 
+// Generic MCP register read -- "MRR <vaddr> <reg>", reg in hex. A raw
+// diagnostic for bring-up: lets the PC read IODIR/OLAT/GPPU directly to
+// verify a pin's actual configured direction and latch, not just its
+// live level (MR / GPIO).
+static void cmdMRR() {
+    uint16_t vaddr, reg;
+    if (!parseHex(strtok(nullptr, " "), &vaddr)) { errCmd(F("bad vaddr")); return; }
+    if (!parseHex(strtok(nullptr, " "), &reg))   { errCmd(F("bad reg"));   return; }
+    bool okFlag;
+    uint8_t v = mcp_read_reg((uint8_t)vaddr, (uint8_t)reg, &okFlag);
+    if (!okFlag) { errCmd(F("i2c")); return; }
+    char buf[3];
+    snprintf(buf, sizeof(buf), "%02X", v);
+    Serial.println(buf);
+}
+
 static void cmdMPOLL() {
     uint16_t vaddr, baseline, timeoutMs; uint8_t isB;
     if (!parseHex(strtok(nullptr, " "), &vaddr))      { errCmd(F("bad vaddr"));    return; }
@@ -445,12 +459,30 @@ static void cmdMBIT() {
     if (!parseUint(strtok(nullptr, " "), &bit) || bit > 7)  { errCmd(F("bad bit"));   return; }
     if (!parseUint(strtok(nullptr, " "), &val) || val > 1)  { errCmd(F("bad val"));   return; }
 
-    uint8_t reg = isB ? MCP_OLATB : MCP_OLATA;
+    uint8_t iodirReg = isB ? MCP_IODIRB : MCP_IODIRA;
+    uint8_t olatReg  = isB ? MCP_OLATB  : MCP_OLATA;
     bool okFlag;
-    uint8_t cur = mcp_read_reg((uint8_t)vaddr, reg, &okFlag);
+
+    // MBIT is a raw "just set the pin" primitive (Command mode's signal/
+    // status-light/Motor Pin Test writes) -- force this one bit to output
+    // first, rather than assuming it already is. A bit whose board-hardware-
+    // table fact (e.g. inverter-enable) was declared via SCU after the last
+    // reset/HWU is still configured as input at this point -- apply_board_hw()
+    // only re-applies IODIR on a reset or HWU, not on a plain SCU write -- and
+    // an OLAT write to an input-configured pin is silently ignored by the
+    // MCP23017.
+    uint8_t iodir = mcp_read_reg((uint8_t)vaddr, iodirReg, &okFlag);
+    if (!okFlag) { errCmd(F("i2c read")); return; }
+    uint8_t iodirNext = iodir & (uint8_t)~(1 << bit);
+    if (iodirNext != iodir) {
+        mcp_write_reg((uint8_t)vaddr, iodirReg, iodirNext, &okFlag);
+        if (!okFlag) { errCmd(F("i2c write")); return; }
+    }
+
+    uint8_t cur = mcp_read_reg((uint8_t)vaddr, olatReg, &okFlag);
     if (!okFlag) { errCmd(F("i2c read")); return; }
     uint8_t next = val ? (uint8_t)(cur | (1 << bit)) : (uint8_t)(cur & ~(1 << bit));
-    mcp_write_reg((uint8_t)vaddr, reg, next, &okFlag);
+    mcp_write_reg((uint8_t)vaddr, olatReg, next, &okFlag);
     if (okFlag) ok(); else errCmd(F("i2c write"));
 }
 
@@ -773,6 +805,7 @@ static void dispatch(char* line) {
     else if (strcmp_P(cmd, PSTR("MPU"))   == 0) cmdMPU();
     else if (strcmp_P(cmd, PSTR("MW"))    == 0) cmdMW();
     else if (strcmp_P(cmd, PSTR("MR"))    == 0) cmdMR();
+    else if (strcmp_P(cmd, PSTR("MRR"))   == 0) cmdMRR();
     else if (strcmp_P(cmd, PSTR("MPOLL")) == 0) cmdMPOLL();
     else if (strcmp_P(cmd, PSTR("MBIT"))  == 0) cmdMBIT();
     else if (strcmp_P(cmd, PSTR("HWU"))   == 0) cmdHWU();
@@ -800,7 +833,7 @@ void setup() {
     apply_all_board_hw(); // data-driven bring-up; a no-op until hardware.json is uploaded once
 
     status(F("LysKontroll Firmware Phase 1"));
-    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MPOLL MBIT HWU HWD SW SR SCU SCD RST"));
+    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MRR MPOLL MBIT HWU HWD SW SR SCU SCD RST"));
 }
 
 void loop() {

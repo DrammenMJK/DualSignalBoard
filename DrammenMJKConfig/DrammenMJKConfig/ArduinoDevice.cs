@@ -103,6 +103,18 @@ sealed class ArduinoDevice
         return -1;
     }
 
+    // Generic MCP register read (MRR). Diagnostic only -- lets a bring-up
+    // tool read IODIR/OLAT/GPPU to confirm a pin's configured direction and
+    // latch, not just its live GPIO level. Common regs (BANK=0): IODIRA 0x00,
+    // IODIRB 0x01, GPPUA 0x0C, OLATA 0x14, OLATB 0x15. Returns -1 on error.
+    public int McpReadRegister(byte vaddr, byte reg)
+    {
+        string? resp = Ask($"MRR {vaddr:X2} {reg:X2}");
+        if (resp != null && byte.TryParse(resp, NumberStyles.HexNumber, null, out byte val))
+            return val;
+        return -1;
+    }
+
     // Returns the changed byte value, or -1 on timeout/error.
     public int McpPollChange(byte vaddr, char port, byte baseline, int timeoutMs)
     {
