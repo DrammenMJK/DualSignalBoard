@@ -830,6 +830,13 @@ void setup() {
     Serial.setTimeout(5000);
 
     Wire.begin();
+    // Bound every TWI wait: without this the AVR Wire lib spins forever on a
+    // bus fault (no pull-ups / no device / SDA or SCL stuck low), so a single
+    // configured-but-absent board would hang the whole firmware here at boot,
+    // before the command loop ever runs. On timeout endTransmission() returns
+    // non-zero, which mcp_*_reg() already reports as "not OK" and
+    // apply_board_hw() already tolerates -- bring-up just skips the missing board.
+    Wire.setWireTimeout(3000 /* us */, true /* reset TWI HW on timeout */);
     apply_all_board_hw(); // data-driven bring-up; a no-op until hardware.json is uploaded once
 
     status(F("LysKontroll Firmware Phase 1"));
