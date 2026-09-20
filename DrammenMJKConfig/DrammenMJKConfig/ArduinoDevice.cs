@@ -59,6 +59,27 @@ sealed class ArduinoDevice
         return resp != null && resp.StartsWith("SITE", StringComparison.Ordinal);
     }
 
+    // Test/Prod mode (see Firmware.ino's ADDR_MODE). Test (the default,
+    // including a blank/erased EEPROM byte) never touches the TWI peripheral
+    // -- SDA/SCL stay plain pulled-up inputs -- so bench diagnostics (I2CD
+    // etc.) can safely characterize a new install's wiring before anything
+    // is allowed to actually drive the bus. Prod fires up I2C immediately at
+    // boot, same as before this gate existed. Returns null on no response.
+    public bool? IsProdMode()
+    {
+        string? resp = Ask("SI", 1000);
+        if (resp == null) return null;
+        if (resp.EndsWith("MODE P", StringComparison.Ordinal)) return true;
+        if (resp.EndsWith("MODE T", StringComparison.Ordinal)) return false;
+        return null;
+    }
+
+    // Only writes the stored EEPROM byte -- takes effect on the next reset
+    // (RST), never live, so a mode change can't interrupt a bring-up
+    // sequence or a switch mid-throw. Caller is responsible for telling the
+    // user to reset/power-cycle.
+    public bool SetMode(bool prod) => Ask($"SETMODE {(prod ? 'P' : 'T')}") == "OK";
+
     // -------------------------------------------------------------------------
     // Virtual addressing — vaddr = bus*0x10 + real_i2c_address
     // -------------------------------------------------------------------------
@@ -113,6 +134,47 @@ sealed class ArduinoDevice
         if (resp != null && byte.TryParse(resp, NumberStyles.HexNumber, null, out byte val))
             return val;
         return -1;
+    }
+
+    // SDA/SCL bus diagnostic (I2CD). The firmware briefly detaches the TWI
+    // peripheral and samples both lines as plain GPIO over ~1s per phase --
+    // first with the AVR's internal pull-up enabled, then with it disabled
+    // -- so a cable run that worked on the bench (short cable) but not once
+    // installed can be told apart from a bad board: steady high both ways is
+    // healthy; high only with the internal pull-up means no external
+    // pull-up is reaching the Arduino; steady low both ways is a short to
+    // GND; a mix is a floating/broken wire. Also carries min/max
+    // analogRead()-derived millivolts per phase, sampled across that same
+    // second -- supplemental to the high/low counts: a weak/resistive
+    // connection reads a narrow band well below the ~4.7-5.1V a healthy line
+    // shows, while a wide swing (picking up mains hum) is the signature of a
+    // genuinely open/floating wire even on samples that happened to read
+    // digitally high throughout. Finally, for the no-pull-up phase, the
+    // transition count and min/max gap (ms) between consecutive digital
+    // transitions -- piggybacked on the same 1ms-spaced samples used for the
+    // high-count, so every gap is directly in ms. A real 50Hz pickup crosses
+    // the logic threshold roughly every ~10ms fairly consistently (narrow
+    // min/max gap); an intermittent mechanical connection shows irregular,
+    // unrelated gaps instead. Returns null on no response.
+    public sealed record I2cDiagResult(
+        int SdaHighWithPullup, int SdaHighNoPullup, int SclHighWithPullup, int SclHighNoPullup, int Samples,
+        int SdaMvPuMin, int SdaMvPuMax, int SdaMvNpMin, int SdaMvNpMax,
+        int SclMvPuMin, int SclMvPuMax, int SclMvNpMin, int SclMvNpMax,
+        int SdaNpTransitions, int SdaNpGapMinMs, int SdaNpGapMaxMs,
+        int SclNpTransitions, int SclNpGapMinMs, int SclNpGapMaxMs);
+
+    public I2cDiagResult? I2CDiagnostic()
+    {
+        // ~2s of firmware-side sampling (two ~1s phases) plus serial margin.
+        string? resp = Ask("I2CD", 5000);
+        if (resp == null) return null;
+        var p = resp.Split(' ');
+        if (p.Length != 19) return null;
+        var v = new int[19];
+        for (int i = 0; i < 19; i++)
+            if (!int.TryParse(p[i], out v[i])) return null;
+        return new I2cDiagResult(v[0], v[1], v[2], v[3], v[4], v[5], v[6], v[7], v[8], v[9], v[10], v[11], v[12],
+            v[13], v[14], v[15], v[16], v[17], v[18]);
     }
 
     // Returns the changed byte value, or -1 on timeout/error.

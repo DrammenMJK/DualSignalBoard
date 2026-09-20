@@ -18,6 +18,7 @@ static class ConfigSession
                 ('J', "System Config Backup (backup/restore)",              () => SystemConfigSession.Run(arduino)),
                 ('E', "Edit switch config — fix labeling/polarity mistakes", () => SwitchEditSession.Run(arduino)),
                 ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),
+                ('M', "Test/Prod mode — enable/disable I2C at boot",       () => ModeConfig(arduino)),
                 ('R', "Reset: erase all config from EEPROM",               () => ResetConfig(arduino)),
             ],
             quitOption: ('Q', "Exit config mode")
@@ -484,6 +485,69 @@ static class ConfigSession
     // status LED / fade config from EEPROM. Carried over from the pre-Phase-1
     // ConfigSession; EC wipes 0x02..EEPROM_ERASE_END on the firmware side.
     // -------------------------------------------------------------------------
+    // Test mode (the default -- also whatever a blank/erased board reads as)
+    // never lets the firmware touch the TWI peripheral at all, so a new
+    // install's wiring can be safely characterized (I2CD, hand-probing) with
+    // zero risk of the board trying to actually drive a bus that hasn't been
+    // verified yet. Switch to Prod once satisfied -- takes a reset to apply.
+    static void ModeConfig(ArduinoDevice arduino)
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Command M: Test/Prod Mode ---");
+
+        bool? current = arduino.IsProdMode();
+        Console.WriteLine(current switch
+        {
+            true => "Current mode: PROD (I2C active at boot).",
+            false => "Current mode: TEST (I2C off at boot -- SDA/SCL are plain pulled-up inputs).",
+            null => "Current mode: unknown -- no response from Arduino.",
+        });
+        Console.WriteLine();
+        Console.WriteLine("  T = Test  -- safe: verify wiring first (Bench test -> I2C bus diagnostic).");
+        Console.WriteLine("  P = Prod  -- fires up I2C at boot, same as normal operation.");
+        Console.Write("Choice (Esc to leave unchanged): ");
+
+        char choice = ReadChar(ch => ch == EscKey || char.ToUpper(ch) == 'T' || char.ToUpper(ch) == 'P');
+        Console.WriteLine(choice == EscKey ? "[Esc]" : char.ToUpper(choice).ToString());
+        if (choice == EscKey) { Console.WriteLine(); return; }
+
+        bool wantProd = char.ToUpper(choice) == 'P';
+        if (!arduino.SetMode(wantProd))
+        {
+            Console.WriteLine("  Failed — no response from Arduino.");
+            Console.WriteLine();
+            return;
+        }
+        Console.WriteLine($"  Stored ({(wantProd ? "PROD" : "TEST")}).");
+
+        // A real watchdog-triggered reset (RST) re-runs setup() the same way
+        // power-cycling would -- no need to physically unplug the board.
+        Console.Write("Reset now to apply? Y = yes, any other key = later: ");
+        char resetNow = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
+        Console.WriteLine(resetNow);
+        if (resetNow == 'Y')
+        {
+            arduino.SoftReset();
+            Console.WriteLine("  Reset sent -- waiting for the board to restart...");
+            Console.WriteLine();
+            Console.WriteLine();
+            // The reboot banner (status() lines, '!'-prefixed) streams in
+            // asynchronously via the background read thread, not through
+            // Ask()/capture -- there's nothing to await. Without this pause
+            // Menu.Run() redraws the Config menu immediately on return, and
+            // the banner lands underneath it a moment later, out of order.
+            // Long enough for the watchdog reset + bootloader + setup() +
+            // the banner itself to arrive over serial.
+            Thread.Sleep(1500);
+            Console.WriteLine();
+        }
+        else
+        {
+            Console.WriteLine("  Not applied yet -- reset later (Config -> M -> same choice -> Y) when ready.");
+        }
+        Console.WriteLine();
+    }
+
     static void ResetConfig(ArduinoDevice arduino)
     {
         Console.WriteLine();

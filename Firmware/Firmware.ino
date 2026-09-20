@@ -46,6 +46,23 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 #define ADDR_DREI_PINBASE   0x03
 #define ADDR_DREI_CWPOL     0x04
 
+// Test/Prod mode gate. 'P' = prod: boots exactly like before this existed --
+// Wire.begin() and apply_all_board_hw() fire immediately at startup. Anything
+// else -- including a blank/erased EEPROM byte (0xFF), or 'T' explicitly --
+// is test mode, the default: the TWI peripheral is never touched and SDA/SCL
+// stay plain pulled-up GPIO inputs, so bench diagnostics (I2CD, and probing
+// with a wire by hand) can safely characterize a new install's wiring before
+// anything is allowed to actually drive the bus. See cmdSETMODE. Shorting
+// SDA/SCL to GND is always electrically safe on this hardware regardless of
+// mode -- I2C is open-drain by design (the TWI peripheral only ever pulls
+// low, never drives push-pull high) and I2CD only ever configures these pins
+// as inputs -- but the mode gate exists anyway so an install with a genuine
+// wiring fault gets caught by input-only probing first, deliberately, before
+// firmware ever tries to talk to a board over a cable run that hasn't been
+// verified yet.
+#define ADDR_MODE            0x05
+#define MODE_PROD            ((uint8_t)'P')
+
 // 0x07-0x0B previously held digital-fade timing (fadeMs/fadeSteps/pwmPeriodUs)
 // for the software-PWM signal-lamp fade loop -- removed, signal fading is
 // analog on the board now, not something firmware ever needs to drive.
@@ -201,10 +218,18 @@ static bool i2c_select_bus(uint8_t bus) {
     return bus == 0;
 }
 
+// Set once in setup() from EEPROM (ADDR_MODE) and never touched again this
+// boot. Every actual I2C transaction funnels through the two primitives
+// below, so gating here is the single choke point -- test mode means
+// literally nothing ever calls Wire.beginTransmission(), not just "the
+// board table is empty".
+static bool g_prodMode = false;
+
 // ---------------------------------------------------------------------------
 // Generic MCP23017 driver — 2 primitives, reused unchanged by every board.
 // ---------------------------------------------------------------------------
 static void mcp_write_reg(uint8_t vaddr, uint8_t reg, uint8_t val, bool* okOut) {
+    if (!g_prodMode) { if (okOut) *okOut = false; return; }
     VAddrResolved r = resolve_vaddr(vaddr);
     if (!r.ok || !i2c_select_bus(r.bus)) { if (okOut) *okOut = false; return; }
     Wire.beginTransmission(r.realAddr);
@@ -215,6 +240,7 @@ static void mcp_write_reg(uint8_t vaddr, uint8_t reg, uint8_t val, bool* okOut) 
 }
 
 static uint8_t mcp_read_reg(uint8_t vaddr, uint8_t reg, bool* okOut) {
+    if (!g_prodMode) { if (okOut) *okOut = false; return 0xFF; }
     VAddrResolved r = resolve_vaddr(vaddr);
     if (!r.ok || !i2c_select_bus(r.bus)) { if (okOut) *okOut = false; return 0xFF; }
     Wire.beginTransmission(r.realAddr);
@@ -327,7 +353,23 @@ static const __FlashStringHelper* switchStateName(SwitchState s) {
 
 static void cmdPing() { Serial.println(F("PONG")); }
 
-static void cmdSI() { Serial.println(F("SITE 1")); }
+static void cmdSI() {
+    Serial.print(F("SITE 1 MODE "));
+    Serial.println((char)(g_prodMode ? 'P' : 'T'));
+}
+
+// Test/Prod mode gate ("SETMODE T"/"SETMODE P") -- see ADDR_MODE above for
+// the full reasoning. Only writes the stored EEPROM byte; g_prodMode (and
+// therefore whether Wire.begin()/apply_all_board_hw() ran) is only ever set
+// in setup(), so a mode change needs a reset (RST) to actually take effect
+// -- deliberately, so switching modes can never interrupt a bring-up
+// sequence or a switch mid-throw.
+static void cmdSETMODE() {
+    char* arg = strtok(nullptr, " ");
+    if (!arg || arg[1] != '\0' || (arg[0] != 'T' && arg[0] != 'P')) { errCmd(F("bad mode -- use T or P")); return; }
+    EEPROM.update(ADDR_MODE, arg[0] == 'P' ? MODE_PROD : (uint8_t)'T');
+    ok();
+}
 
 static void cmdER() {
     uint16_t addr;
@@ -408,6 +450,115 @@ static void cmdMRR() {
     if (!okFlag) { errCmd(F("i2c")); return; }
     char buf[3];
     snprintf(buf, sizeof(buf), "%02X", v);
+    Serial.println(buf);
+}
+
+// I2C bus diagnostic ("I2CD", no args). SDA/SCL (PC4/PC5 on this Uno, also
+// ADC4/ADC5) are plain AVR GPIO -- and analog-readable -- pins once the TWI
+// peripheral releases them. For diagnosing an install where the board
+// worked on the bench (short cable) but not once mounted with the real
+// cable run. Detaches TWI, samples both lines first with the AVR's internal
+// pull-up enabled (matches Wire's normal idle state), then again with it
+// disabled (isolates whether an external pull-up -- e.g. on the SCB board
+// -- is actually reaching this line), then restores both pull-up and TWI
+// before returning so I2C keeps working afterward.
+//
+// Each phase runs ~1s (N digital samples at 1ms apart -- 50 mains cycles at
+// 50Hz), not a quick snapshot: a genuinely open/floating wire can pick up
+// enough mains hum to swing across the logic threshold, which a handful of
+// microsecond-spaced reads can miss entirely. Alongside the digital
+// high-count, ~20 analogRead() snapshots spread across the same second
+// track min/max millivolts -- a wide swing is the noise/floating signature
+// even on samples that all happened to read digitally high; a narrow band
+// well below ~4.7-5.1V is a weak/resistive connection instead. The PC side
+// (cmdI2CD's caller) does the classification from these raw numbers.
+static void cmdI2CD() {
+    uint8_t twcrSaved = TWCR;
+    TWCR &= (uint8_t)~(1 << TWEN); // release SDA/SCL from the TWI peripheral
+
+    const uint16_t N = 1000;       // ~1s at 1ms/sample
+    const uint16_t MV_EVERY = 50;  // an analogRead pair every 50 digital samples (~20 across the window)
+
+    DDRC  &= (uint8_t)~((1 << 4) | (1 << 5)); // input
+    PORTC |= (1 << 4) | (1 << 5);             // internal pull-up on
+    delay(2);
+    uint16_t sdaHiPu = 0, sclHiPu = 0;
+    uint16_t sdaMvPuMin = 9999, sdaMvPuMax = 0, sclMvPuMin = 9999, sclMvPuMax = 0;
+    for (uint16_t i = 0; i < N; i++) {
+        uint8_t p = PINC;
+        if (p & (1 << 4)) sdaHiPu++;
+        if (p & (1 << 5)) sclHiPu++;
+        if (i % MV_EVERY == 0) {
+            uint16_t sMv = (uint16_t)((uint32_t)analogRead(A4) * 5000UL / 1023UL);
+            uint16_t cMv = (uint16_t)((uint32_t)analogRead(A5) * 5000UL / 1023UL);
+            if (sMv < sdaMvPuMin) sdaMvPuMin = sMv;
+            if (sMv > sdaMvPuMax) sdaMvPuMax = sMv;
+            if (cMv < sclMvPuMin) sclMvPuMin = cMv;
+            if (cMv > sclMvPuMax) sclMvPuMax = cMv;
+        }
+        delay(1);
+    }
+
+    PORTC &= (uint8_t)~((1 << 4) | (1 << 5)); // internal pull-up off, still input
+    delay(2);
+    uint16_t sdaHiNp = 0, sclHiNp = 0;
+    uint16_t sdaMvNpMin = 9999, sdaMvNpMax = 0, sclMvNpMin = 9999, sclMvNpMax = 0;
+    // Transition timing, piggybacked on the same 1ms-spaced PINC reads
+    // already being taken for the high-count above (no extra ADC cost, no
+    // change to sample cadence). Every sample index is 1ms, so the gap
+    // between consecutive transitions is directly in ms. A real 50Hz pickup
+    // crosses the logic threshold roughly every ~10ms (twice per 20ms
+    // cycle) fairly consistently -- narrow min/max gap clustering near 10ms
+    // is that signature; wide/irregular gaps point at a flaky mechanical
+    // connection (intermittent contact) instead of ambient noise.
+    uint8_t prevP = PINC;
+    uint16_t sdaTrans = 0, sclTrans = 0, sdaLastIdx = 0, sclLastIdx = 0;
+    uint16_t sdaGapMin = 0xFFFF, sdaGapMax = 0, sclGapMin = 0xFFFF, sclGapMax = 0;
+    for (uint16_t i = 0; i < N; i++) {
+        uint8_t p = PINC;
+        if (p & (1 << 4)) sdaHiNp++;
+        if (p & (1 << 5)) sclHiNp++;
+        if ((p & (1 << 4)) != (prevP & (1 << 4))) {
+            if (sdaTrans > 0) {
+                uint16_t gap = (uint16_t)(i - sdaLastIdx);
+                if (gap < sdaGapMin) sdaGapMin = gap;
+                if (gap > sdaGapMax) sdaGapMax = gap;
+            }
+            sdaLastIdx = i;
+            sdaTrans++;
+        }
+        if ((p & (1 << 5)) != (prevP & (1 << 5))) {
+            if (sclTrans > 0) {
+                uint16_t gap = (uint16_t)(i - sclLastIdx);
+                if (gap < sclGapMin) sclGapMin = gap;
+                if (gap > sclGapMax) sclGapMax = gap;
+            }
+            sclLastIdx = i;
+            sclTrans++;
+        }
+        prevP = p;
+        if (i % MV_EVERY == 0) {
+            uint16_t sMv = (uint16_t)((uint32_t)analogRead(A4) * 5000UL / 1023UL);
+            uint16_t cMv = (uint16_t)((uint32_t)analogRead(A5) * 5000UL / 1023UL);
+            if (sMv < sdaMvNpMin) sdaMvNpMin = sMv;
+            if (sMv > sdaMvNpMax) sdaMvNpMax = sMv;
+            if (cMv < sclMvNpMin) sclMvNpMin = cMv;
+            if (cMv > sclMvNpMax) sclMvNpMax = cMv;
+        }
+        delay(1);
+    }
+    if (sdaGapMin == 0xFFFF) sdaGapMin = 0; // fewer than 2 transitions -- no gap to report
+    if (sclGapMin == 0xFFFF) sclGapMin = 0;
+
+    PORTC |= (1 << 4) | (1 << 5); // restore idle state (input, pull-up on)
+    TWCR = twcrSaved;             // restore TWI
+
+    char buf[128];
+    snprintf(buf, sizeof(buf), "%u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u %u",
+             sdaHiPu, sdaHiNp, sclHiPu, sclHiNp, N,
+             sdaMvPuMin, sdaMvPuMax, sdaMvNpMin, sdaMvNpMax,
+             sclMvPuMin, sclMvPuMax, sclMvNpMin, sclMvNpMax,
+             sdaTrans, sdaGapMin, sdaGapMax, sclTrans, sclGapMin, sclGapMax);
     Serial.println(buf);
 }
 
@@ -806,6 +957,7 @@ static void dispatch(char* line) {
     else if (strcmp_P(cmd, PSTR("MW"))    == 0) cmdMW();
     else if (strcmp_P(cmd, PSTR("MR"))    == 0) cmdMR();
     else if (strcmp_P(cmd, PSTR("MRR"))   == 0) cmdMRR();
+    else if (strcmp_P(cmd, PSTR("I2CD"))  == 0) cmdI2CD();
     else if (strcmp_P(cmd, PSTR("MPOLL")) == 0) cmdMPOLL();
     else if (strcmp_P(cmd, PSTR("MBIT"))  == 0) cmdMBIT();
     else if (strcmp_P(cmd, PSTR("HWU"))   == 0) cmdHWU();
@@ -814,6 +966,7 @@ static void dispatch(char* line) {
     else if (strcmp_P(cmd, PSTR("SR"))    == 0) cmdSR();
     else if (strcmp_P(cmd, PSTR("SCU"))   == 0) cmdSCU();
     else if (strcmp_P(cmd, PSTR("SCD"))   == 0) cmdSCD();
+    else if (strcmp_P(cmd, PSTR("SETMODE")) == 0) cmdSETMODE();
     else if (strcmp_P(cmd, PSTR("RST"))   == 0) softReset();
     else {
         Serial.print(F("ERR unknown: "));
@@ -829,18 +982,31 @@ void setup() {
     Serial.begin(115200);
     Serial.setTimeout(5000);
 
-    Wire.begin();
-    // Bound every TWI wait: without this the AVR Wire lib spins forever on a
-    // bus fault (no pull-ups / no device / SDA or SCL stuck low), so a single
-    // configured-but-absent board would hang the whole firmware here at boot,
-    // before the command loop ever runs. On timeout endTransmission() returns
-    // non-zero, which mcp_*_reg() already reports as "not OK" and
-    // apply_board_hw() already tolerates -- bring-up just skips the missing board.
-    Wire.setWireTimeout(3000 /* us */, true /* reset TWI HW on timeout */);
-    apply_all_board_hw(); // data-driven bring-up; a no-op until hardware.json is uploaded once
+    g_prodMode = EEPROM.read(ADDR_MODE) == MODE_PROD;
+    if (g_prodMode) {
+        Wire.begin();
+        // Bound every TWI wait: without this the AVR Wire lib spins forever on
+        // a bus fault (no pull-ups / no device / SDA or SCL stuck low), so a
+        // single configured-but-absent board would hang the whole firmware
+        // here at boot, before the command loop ever runs. On timeout
+        // endTransmission() returns non-zero, which mcp_*_reg() already
+        // reports as "not OK" and apply_board_hw() already tolerates --
+        // bring-up just skips the missing board.
+        Wire.setWireTimeout(3000 /* us */, true /* reset TWI HW on timeout */);
+        apply_all_board_hw(); // data-driven bring-up; a no-op until hardware.json is uploaded once
+    } else {
+        // Test mode (default): TWI peripheral is never touched -- mcp_*_reg()
+        // refuses on g_prodMode alone, before ever reaching Wire. Set SDA/SCL
+        // to the same idle state Wire.begin() would (input, internal
+        // pull-up), so a plain digital read looks normal even though nothing
+        // is driving the bus.
+        pinMode(A4, INPUT_PULLUP);
+        pinMode(A5, INPUT_PULLUP);
+    }
 
     status(F("LysKontroll Firmware Phase 1"));
-    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MRR MPOLL MBIT HWU HWD SW SR SCU SCD RST"));
+    status(g_prodMode ? F("Mode: PROD (I2C active)") : F("Mode: TEST (I2C off -- SETMODE P, then RST, to enable)"));
+    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MRR I2CD SETMODE MPOLL MBIT HWU HWD SW SR SCU SCD RST"));
 }
 
 void loop() {

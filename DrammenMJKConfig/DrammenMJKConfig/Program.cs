@@ -21,6 +21,18 @@ using var conn = connected.Value.Conn;
 var arduino = connected.Value.Device;
 
 Console.WriteLine($"Connected on {connected.Value.PortName}. SVB: {BoardConfig.Svb.Name}");
+
+// Surface Test/Prod mode up front -- in Test mode every I2C/MCP command
+// (Motor scan, Operate, Bench test's raw pin tools) will silently report
+// "no response" since the board never touches the TWI peripheral at all.
+// Without this banner that looks like a hardware fault, not a mode setting.
+bool? prod = arduino.IsProdMode();
+Console.WriteLine(prod switch
+{
+    true => "Mode: PROD (I2C active).",
+    false => "Mode: TEST (I2C OFF -- board won't respond on the bus. Config -> M to switch to Prod.)",
+    null => "Mode: unknown -- no response querying SI.",
+});
 Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();

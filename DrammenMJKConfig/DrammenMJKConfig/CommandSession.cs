@@ -3,14 +3,17 @@ using static DrammenMJKConfig.ConfigInputHelpers;
 namespace DrammenMJKConfig;
 
 // Operate a board: pick it (SCB) first, then Motors, Signals, Status Light,
-// or Motor Pin Test, then loop within that section so repeated checks don't
-// need re-navigating each time. Motors never touch port/bit/vaddr directly —
-// resolves label -> slot via BoardConfig, then DriveSwitch/ReadSwitch (SW/SR)
-// do all the port/bit/polarity resolution in firmware. Signals, the status
-// light, and Motor Pin Test go through raw McpSetBit instead (see
+// Motor Pin Test, Input Test, or Track Detection, then loop within that
+// section so repeated checks don't need re-navigating each time. Motors
+// never touch port/bit/vaddr directly — resolves label -> slot via
+// BoardConfig, then DriveSwitch/ReadSwitch (SW/SR) do all the
+// port/bit/polarity resolution in firmware. Signals, the status light, and
+// Motor Pin Test go through raw McpSetBit instead (see
 // RunSignals/RunStatusLight/RunMotorPinTest) -- there's no "drive and wait"
 // concept for a lamp, and Motor Pin Test deliberately skips that logic too,
-// for verifying raw wiring during bring-up. See PLAN_Phase1.md, Command mode.
+// for verifying raw wiring during bring-up. Input Test and Track Detection
+// are read-only live polls (McpReadPort) -- see RunInputTest/
+// RunTrackDetection. See PLAN_Phase1.md, Command mode.
 static class CommandSession
 {
     // Same motor, same ~5s observed travel time as MotorScan's
@@ -52,9 +55,10 @@ static class CommandSession
             Console.WriteLine("  3 = Status Light");
             Console.WriteLine("  4 = Motor Pin Test (raw on/off, for wiring checks)");
             Console.WriteLine("  5 = Input Test (live poll of feedback / input pins)");
+            Console.WriteLine("  6 = Track Detection (live poll, train present/clear)");
             Console.Write("Choice (Esc for board list): ");
 
-            char input = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '5'));
+            char input = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '6'));
             Console.WriteLine(input == EscKey ? "[Esc]" : input.ToString());
             if (input == EscKey) { Console.WriteLine(); return; }
 
@@ -65,6 +69,7 @@ static class CommandSession
                 case '3': RunStatusLight(arduino, scb); break;
                 case '4': RunMotorPinTest(arduino, scb); break;
                 case '5': RunInputTest(arduino, scb); break;
+                case '6': RunTrackDetection(arduino, scb); break;
             }
         }
     }
@@ -297,6 +302,53 @@ static class CommandSession
         Console.WriteLine();
     }
 
+    // Live poll of the board's track detection bit (always Port A -- see
+    // ConfigSession.TrackDetectionScan), reporting train present/clear every
+    // 0.3s. Bit + polarity come from SystemConfig.json (Track Detection
+    // Scan's result), not boards.json -- discovered, not declared, same as
+    // RunSignals needing SystemConfig for its bits. Any key stops it.
+    static void RunTrackDetection(ArduinoDevice arduino, BoardScb scb)
+    {
+        var file = SystemConfigSession.LoadOrNew();
+        if (!file.TrackDetections.TryGetValue(scb.Name, out var td) || td.VAddr == null || td.Bit == null || td.ActiveHigh == null)
+        {
+            Console.WriteLine($"  {scb.Name} has no track detection configured — run Track detection scan first.");
+            Console.WriteLine();
+            return;
+        }
+        byte vaddr = Convert.ToByte(td.VAddr, 16);
+        int bit = td.Bit.Value;
+        bool activeHigh = td.ActiveHigh.Value;
+
+        Console.WriteLine();
+        Console.WriteLine($"{scb.Name} track detection  (vaddr 0x{vaddr:X2}, Port A bit {bit}, active {(activeHigh ? "high" : "low")})");
+        Console.WriteLine("Polling every 0.3s. Any key to stop.");
+        Console.WriteLine();
+
+        while (Console.KeyAvailable) Console.ReadKey(intercept: true); // drop stale keys
+
+        while (!Console.KeyAvailable)
+        {
+            int gpioA = arduino.McpReadPort(vaddr, 'A');
+            string state;
+            if (gpioA < 0)
+            {
+                state = "? no response";
+            }
+            else
+            {
+                bool bitHigh = ((gpioA >> bit) & 1) == 1;
+                state = bitHigh == activeHigh ? "TRAIN DETECTED" : "clear";
+            }
+            Console.Write($"\r  {state}".PadRight(40));
+
+            System.Threading.Thread.Sleep(300);
+        }
+        Console.ReadKey(intercept: true); // consume the stop key
+        Console.WriteLine();
+        Console.WriteLine();
+    }
+
     // Sets a board's signal to one of its states directly (raw McpSetBit
     // writes, like Bench Test -- no EEPROM/SW involvement, since there's no
     // "drive to state and wait" concept for a lamp the way there is for a
@@ -368,15 +420,46 @@ static class CommandSession
             Console.WriteLine($"{scb.Name} status light:");
             Console.WriteLine("  1 = On");
             Console.WriteLine("  2 = Off");
+            Console.WriteLine("  3 = Flash test (6x, 0.5s period)");
             Console.Write("Choice (Esc for board menu): ");
 
-            char input = ReadChar(ch => ch == EscKey || ch == '1' || ch == '2');
+            char input = ReadChar(ch => ch == EscKey || ch is '1' or '2' or '3');
             Console.WriteLine(input == EscKey ? "[Esc]" : input.ToString());
             if (input == EscKey) { Console.WriteLine(); return; }
+
+            if (input == '3')
+            {
+                FlashStatusLight(arduino, scb, led, vaddr);
+                continue;
+            }
 
             bool on = input == '1';
             arduino.McpSetBit(vaddr, led.Port, led.Bit, on);
             Console.WriteLine($"  Set: {(on ? "On" : "Off")}");
         }
+    }
+
+    // 6 on/off cycles at a 0.5s period (0.25s on, 0.25s off) -- a quick
+    // visual check that the lamp and its wiring are good. Enables the
+    // inverter first, if this board has one: the status lamp is wired
+    // through the same enable rail as the motor driver stage on some
+    // boards, so without it the lamp wouldn't light regardless of the GPIO
+    // bit. Active-low -- McpSetBit(..., false) drives it low = enabled.
+    // Left enabled afterward (not restored) since that's normally what you
+    // want before going on to test the rest of the board.
+    static void FlashStatusLight(ArduinoDevice arduino, BoardScb scb, (char Port, int Bit) led, byte vaddr)
+    {
+        if (scb.InverterEnablePin is { } en)
+            arduino.McpSetBit(vaddr, en.Port, en.Bit, false);
+
+        Console.WriteLine("  Flashing 6x...");
+        for (int i = 0; i < 6; i++)
+        {
+            arduino.McpSetBit(vaddr, led.Port, led.Bit, true);
+            System.Threading.Thread.Sleep(250);
+            arduino.McpSetBit(vaddr, led.Port, led.Bit, false);
+            System.Threading.Thread.Sleep(250);
+        }
+        Console.WriteLine("  Done.");
     }
 }

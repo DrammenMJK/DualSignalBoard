@@ -2,6 +2,7 @@
 
 // Uncomment to enable serial monitor output
 #define SERIAL_MONITOR_ENABLED
+#define DEBUG_MSG
 
 enum Direction {
   DIR_NONE = 0,
