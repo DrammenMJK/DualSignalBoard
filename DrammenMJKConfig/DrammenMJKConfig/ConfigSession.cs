@@ -141,7 +141,25 @@ static class ConfigSession
                     firedBits.Add(motorBit);
                 }
             }
-            // 'O': leave both sets empty -- rescan everything, overwriting stored slots.
+            else
+            {
+                // 'O': clear this board's existing slot data up front, not just
+                // whichever slots get reassigned below. Previously a skipped/
+                // timed-out bit (no feedback seen) left the OLD slot bytes
+                // untouched, so "Overwrite" could silently leave stale,
+                // possibly-wrong motor-bit data behind for any switch that
+                // doesn't get reconfirmed this run -- which is exactly how two
+                // switches on this board ended up both pointing at the same
+                // physical motor bit after an earlier boards.json correction
+                // (one got rescanned onto its new bit, the other's old EEPROM
+                // entry just sat there unconfigured-but-not-cleared, still
+                // matching the new entry's bit by coincidence).
+                foreach (var (label, _) in alreadyConfigured)
+                {
+                    BoardConfig.TryFindSlotByLabel(label, out int staleSlot);
+                    arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr + staleSlot, ArduinoDevice.Unset);
+                }
+            }
         }
 
         bool userAborted = false;
@@ -218,12 +236,18 @@ static class ConfigSession
                 Console.WriteLine("  Which switch moved?");
                 for (int r = 0; r < remaining.Count; r++)
                     Console.WriteLine($"    {r + 1}) {remaining[r]}");
-                Console.Write("  Choice (0=skip, Esc=abort): ");
+                Console.Write("  Choice (0=skip, R=repeat, Esc=abort): ");
 
-                char choice = ReadChar(ch => ch == '0' || ch == EscKey || (ch >= '1' && ch <= '9' && (ch - '1') < remaining.Count));
+                char choice = ReadChar(ch => ch == '0' || ch == EscKey || char.ToUpper(ch) == 'R' || (ch >= '1' && ch <= '9' && (ch - '1') < remaining.Count));
                 Console.WriteLine(choice == EscKey ? "[Esc]" : choice.ToString());
 
                 if (choice == EscKey) { userAborted = true; break; }
+                if (char.ToUpper(choice) == 'R')
+                {
+                    // Re-fire the motor from the top of the loop so the user can watch
+                    // it move again before deciding which switch it was.
+                    continue;
+                }
                 if (choice == '0')
                 {
                     arduino.McpSetBit(vaddr, 'B', motorBit, false); // leave stalled — safe default

@@ -113,9 +113,48 @@ static class CommandSession
 
             if (!BoardConfig.TryFindSlotByLabel(label, out int slot)) continue;
 
-            if (arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) == ArduinoDevice.Unset)
+            bool configured = arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) != ArduinoDevice.Unset;
+
+            if (!configured)
             {
-                Console.WriteLine($"Switch {label} is not configured — run Motor scan first.");
+                // No trained feedback mapping yet (Motor scan hasn't stored this
+                // slot) -- that only blocks the Rett/Avvik-confirmed drive below,
+                // not just running the motor. Fire it raw, the same way Motor
+                // scan itself does before it knows which switch moved, and
+                // report whatever the feedback chip saw (there may be none
+                // wired up yet, which is fine -- that's exactly the case this
+                // path exists for).
+                int swIndex = scb.Switches.ToList().FindIndex(s => s.Label == label);
+                byte vaddr = scb.VirtualAddress;
+                int motorBit = scb.MotorBitFor(swIndex);
+
+                int baseline = arduino.McpReadPort(vaddr, 'A');
+                int restOlatB = arduino.McpReadPort(vaddr, 'B');
+                if (baseline < 0 || restOlatB < 0)
+                {
+                    Console.WriteLine("  I2C error reading board state.");
+                    Console.WriteLine();
+                    continue;
+                }
+                bool restState = ((restOlatB >> motorBit) & 1) != 0;
+                bool fireState = !restState;
+
+                Console.WriteLine($"{label} has no trained feedback mapping (Motor scan not run/overwritten for this slot) --");
+                Console.WriteLine($"firing raw: motor bit {motorBit} on 0x{vaddr:X2} ({restState} -> {fireState}).");
+
+                if (!arduino.McpSetBit(vaddr, 'B', motorBit, fireState))
+                {
+                    Console.WriteLine("  I2C error firing motor.");
+                    Console.WriteLine();
+                    continue;
+                }
+
+                int changed = arduino.McpPollChange(vaddr, 'A', (byte)baseline, TimeoutMs);
+                if (changed < 0)
+                    Console.WriteLine($"  Feedback 0x{vaddr:X2}: no change seen within {TimeoutMs}ms (nothing wired yet, or motor didn't move).");
+                else
+                    ReportFeedbackChange(vaddr, baseline, changed);
+
                 Console.WriteLine();
                 continue;
             }
@@ -147,10 +186,39 @@ static class CommandSession
             if (pos == EscKey) { Console.WriteLine("[Esc]"); Console.WriteLine(); continue; }
             Console.WriteLine(pos);
 
+            byte fbVAddr = arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackVAddr + slot);
+            int fbBefore = arduino.McpReadPort(fbVAddr, 'A');
+
             var result = arduino.DriveSwitch(slot, pos, TimeoutMs);
             Console.WriteLine($"Result: {result}");
+
+            int fbAfter = arduino.McpReadPort(fbVAddr, 'A');
+            ReportFeedbackChange(fbVAddr, fbBefore, fbAfter);
+
             Console.WriteLine();
         }
+    }
+
+    // "Which feedback address changed" report shared by the trained
+    // (Rett/Avvik-confirmed) and raw firing paths above -- names the vaddr
+    // and the GPIOA bits that flipped, so cross-wiring between switches
+    // (two slots driving the same bit, wrong feedback chip, etc.) is visible
+    // immediately instead of only showing up as "wrong switch moved".
+    static void ReportFeedbackChange(byte vaddr, int before, int after)
+    {
+        if (before < 0 || after < 0)
+        {
+            Console.WriteLine($"  Feedback 0x{vaddr:X2}: I2C error reading GPIOA.");
+            return;
+        }
+        if (before == after)
+        {
+            Console.WriteLine($"  Feedback 0x{vaddr:X2}: no change (GPIOA stayed 0x{before:X2}).");
+            return;
+        }
+        int diff = before ^ after;
+        var bits = Enumerable.Range(0, 8).Where(b => ((diff >> b) & 1) != 0).ToList();
+        Console.WriteLine($"  Feedback 0x{vaddr:X2}: GPIOA 0x{before:X2} -> 0x{after:X2} (bit{(bits.Count > 1 ? "s" : "")} {string.Join(",", bits)} changed).");
     }
 
     // Wiring bring-up tool. Holds an explicit model of every output bit on

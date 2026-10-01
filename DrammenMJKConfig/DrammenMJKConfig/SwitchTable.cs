@@ -49,5 +49,27 @@ static class SwitchTable
         PrintRow(widths.Select(w => new string('-', w)).ToArray());
         foreach (var line in lines) PrintRow(line);
         Console.WriteLine();
+
+        PrintDuplicateWarnings(rows);
+    }
+
+    // Two switches scanned onto the exact same (motor vaddr, motor bit) --
+    // e.g. stale EEPROM left behind when a prior scan's "0 = skip" didn't
+    // clear the old slot -- silently drives them identically; firing either
+    // one moves the other's motor. Surface it here instead of only finding
+    // out by watching the wrong motor move.
+    static void PrintDuplicateWarnings(List<(string Label, SwitchSlotData Data)> rows)
+    {
+        var dupes = rows
+            .Where(r => r.Data.IsConfigured)
+            .GroupBy(r => (r.Data.MotorVAddr, r.Data.MotorBit))
+            .Where(g => g.Count() > 1);
+
+        foreach (var g in dupes)
+        {
+            string labels = string.Join(", ", g.Select(r => r.Label));
+            Console.WriteLine($"  WARNING: {labels} all share motor vaddr 0x{g.Key.MotorVAddr:X2} bit {g.Key.MotorBit} -- driving any one of them will move the same physical motor. Re-run Motor scan (Overwrite) for this board.");
+        }
+        if (dupes.Any()) Console.WriteLine();
     }
 }
