@@ -10,7 +10,7 @@
       "category": "SCB",
       "chips": [
         {
-          "vaddr": "0x20",
+          "vaddr": "0x24",
           "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu"],
           "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
         }
@@ -21,7 +21,7 @@
       "category": "SCB",
       "chips": [
         {
-          "vaddr": "0x21",
+          "vaddr": "0x20",
           "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "out"],
           "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
         }

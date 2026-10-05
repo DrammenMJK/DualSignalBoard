@@ -20,6 +20,7 @@ static class ConfigSession
                 ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),
                 ('M', "Test/Prod mode — enable/disable I2C at boot",       () => ModeConfig(arduino)),
                 ('R', "Reset: erase all config from EEPROM",               () => ResetConfig(arduino)),
+                ('A', "Restart Arduino (watchdog reset, re-runs setup())", () => Restart(arduino)),
             ],
             quitOption: ('Q', "Exit config mode")
         );
@@ -373,6 +374,23 @@ static class ConfigSession
             bits = bitTokens.Select(int.Parse).ToArray();
         }
 
+        // Lamp check: all lamps on at once (bulbs/wiring alive?) before
+        // working out which bit is which color.
+        while (true)
+        {
+            Console.Write("S = scan colors   L = all lamps on   Esc = abort: ");
+            char mode = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'S' or 'L' || ch == EscKey));
+            Console.WriteLine(mode == EscKey ? "[Esc]" : mode.ToString());
+            if (mode == EscKey) { Console.WriteLine(); return; }
+            if (mode == 'S') break;
+
+            foreach (int bit in bits) arduino.McpSetBit(vaddr, 'B', bit, true);
+            Console.Write($"  Bits {string.Join(", ", bits)} on. Any key to turn them off: ");
+            ReadChar(_ => true);
+            foreach (int bit in bits) arduino.McpSetBit(vaddr, 'B', bit, false);
+            Console.WriteLine("off.");
+        }
+
         var remaining = new List<string> { "Green", "Red", "Green2" };
         var assignment = new Dictionary<int, string>(); // bit -> color
         bool userAborted = false;
@@ -436,10 +454,10 @@ static class ConfigSession
 
     // -------------------------------------------------------------------------
     // Command 3: Track detection — which Port A bit reads train presence, and
-    // which level (high/low) means a train is actually there. The bit itself
-    // is asked for here rather than declared in boards.json (same reasoning
-    // as Signal Scan's candidate bits) since this whole routine only exists
-    // because the polarity needs a live, human-confirmed observation anyway.
+    // which level (high/low) means a train is actually there. The bit comes
+    // from boards.json's trackDetectBit when declared (it's fixed wiring);
+    // only the polarity needs a live, human-confirmed observation. Asked for
+    // as a fallback on boards that don't declare it.
     // -------------------------------------------------------------------------
     static void TrackDetectionScan(ArduinoDevice arduino)
     {
@@ -457,13 +475,22 @@ static class ConfigSession
         var scb = scbs[boardChoice - '1'];
         byte vaddr = scb.VirtualAddress;
 
-        Console.Write("Which Port A bit is track detection on (e.g. 7, blank to abort): ");
-        string? bitInput = Console.ReadLine()?.Trim();
-        if (string.IsNullOrEmpty(bitInput) || !int.TryParse(bitInput, out int bit) || bit is < 0 or > 7)
+        int bit;
+        if (scb.TrackDetectBit is int declared)
         {
-            Console.WriteLine(string.IsNullOrEmpty(bitInput) ? "" : "  Must be 0-7.");
-            Console.WriteLine();
-            return;
+            bit = declared;
+            Console.WriteLine($"Track detection is Port A bit {bit} (declared in boards.json).");
+        }
+        else
+        {
+            Console.Write("Which Port A bit is track detection on (e.g. 7, blank to abort): ");
+            string? bitInput = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(bitInput) || !int.TryParse(bitInput, out bit) || bit is < 0 or > 7)
+            {
+                Console.WriteLine(string.IsNullOrEmpty(bitInput) ? "" : "  Must be 0-7.");
+                Console.WriteLine();
+                return;
+            }
         }
 
         int portA = arduino.McpReadPort(vaddr, 'A');
@@ -550,25 +577,26 @@ static class ConfigSession
         char resetNow = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
         Console.WriteLine(resetNow);
         if (resetNow == 'Y')
-        {
-            arduino.SoftReset();
-            Console.WriteLine("  Reset sent -- waiting for the board to restart...");
-            Console.WriteLine();
-            Console.WriteLine();
-            // The reboot banner (status() lines, '!'-prefixed) streams in
-            // asynchronously via the background read thread, not through
-            // Ask()/capture -- there's nothing to await. Without this pause
-            // Menu.Run() redraws the Config menu immediately on return, and
-            // the banner lands underneath it a moment later, out of order.
-            // Long enough for the watchdog reset + bootloader + setup() +
-            // the banner itself to arrive over serial.
-            Thread.Sleep(1500);
-            Console.WriteLine();
-        }
+            Restart(arduino);
         else
-        {
-            Console.WriteLine("  Not applied yet -- reset later (Config -> M -> same choice -> Y) when ready.");
-        }
+            Console.WriteLine("  Not applied yet -- reset later (Config -> A) when ready.");
+        Console.WriteLine();
+    }
+
+    static void Restart(ArduinoDevice arduino)
+    {
+        arduino.SoftReset();
+        Console.WriteLine("  Reset sent -- waiting for the board to restart...");
+        Console.WriteLine();
+        Console.WriteLine();
+        // The reboot banner (status() lines, '!'-prefixed) streams in
+        // asynchronously via the background read thread, not through
+        // Ask()/capture -- there's nothing to await. Without this pause
+        // Menu.Run() redraws the menu immediately on return, and the banner
+        // lands underneath it a moment later, out of order. Long enough for
+        // the watchdog reset + bootloader + setup() + the banner itself to
+        // arrive over serial.
+        Thread.Sleep(1500);
         Console.WriteLine();
     }
 

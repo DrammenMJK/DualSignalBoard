@@ -59,6 +59,10 @@ sealed class BoardDeclaration
     // Scan each time). Always explicit, not a "first" convenience -- Fossli
     // Venstre's signal bits (0,2,4) aren't consecutive either.
     [JsonPropertyName("signalBits")] public List<int>? SignalBits { get; set; }
+    // Fixed hardware fact: which Port A bit the track detector is wired to.
+    // Only its polarity needs observing, so Track Detection scan uses this
+    // instead of asking (it still asks when this isn't declared).
+    [JsonPropertyName("trackDetectBit")] public int? TrackDetectBit { get; set; }
 }
 
 sealed class SvbDeclaration
@@ -107,7 +111,8 @@ sealed record BoardScb(
     (int Base, int Upper)? DreieskivePins,
     (char Port, int Bit)? StatusLedPin,
     (char Port, int Bit)? InverterEnablePin,
-    IReadOnlyList<int>? SignalBits
+    IReadOnlyList<int>? SignalBits,
+    int? TrackDetectBit = null
 )
 {
     public byte VirtualAddress => VirtualAddresses[0];
@@ -179,7 +184,8 @@ static class BoardConfig
             b.Dreieskive is { } d ? (d.Base, d.Upper) : null,
             b.StatusLedBit is { } bit ? ('B', bit) : null,
             b.InverterEnable is { } inv ? (inv.Port[0], inv.Bit) : null,
-            b.SignalBits
+            b.SignalBits,
+            b.TrackDetectBit
         );
     }
 

@@ -41,8 +41,7 @@ var menu = new Menu(
     [
         ('C', "Config mode", () => ConfigSession.Run(arduino)),
         ('O', "Operate — drive motors, signals, status lights", () => CommandSession.Run(arduino)),
-        ('S', "Status — EEPROM summary", () => StatusSession.Run(arduino)),
-    ],
+        ('S', "Status — EEPROM summary", () => StatusSession.Run(arduino)),    ],
     quitOption: ('Q', "Quit")
 );
 menu.Run();

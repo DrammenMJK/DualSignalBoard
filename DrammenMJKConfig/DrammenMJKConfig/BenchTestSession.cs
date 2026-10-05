@@ -1,7 +1,7 @@
 namespace DrammenMJKConfig;
 
-// Raw MCP23017 bring-up/bench tools -- probe a chip, force a port direction,
-// toggle a single output bit. Talks straight to the MDIR/MW/MR/MBIT commands
+// Raw MCP23017 bring-up/bench tools -- probe a chip, read/set a port direction,
+// toggle a single output bit. Talks straight to the MDIR/MW/MR/MRR/MBIT commands
 // via ArduinoDevice's Mcp* wrappers (the same primitives Motor Scan uses
 // internally); nothing here touches EEPROM or hardware.json. Useful for
 // checking new wiring before it's declared anywhere.
@@ -18,10 +18,10 @@ static class BenchTestSession
             [
                 ('P', "Probe a chip (is it on the bus?)",   () => Probe(arduino)),
                 ('W', "Sweep 0x20-0x27 (all MCP23017 addrs)", () => SweepAddresses(arduino)),
-                ('R', "Read a port",                       () => ReadPort(arduino)),
-                ('C', "Continuous read (watch a port for changes)", () => WatchPort(arduino)),
-                ('D', "Set a port's direction (raw mask)",  () => SetDirection(arduino)),
-                ('S', "Set/clear a single output bit",      () => SetBit(arduino)),
+                ('R', "Read a port (continuous, prints on change)", () => ReadPort(arduino)),
+                ('D', "Read/set a port's direction (IODIR)", () => SetDirection(arduino)),
+                ('U', "Read/set a port's pull-ups (GPPU)",   () => SetPullup(arduino)),
+                ('S', "Toggle a single output bit",         () => ToggleBit(arduino)),
                 ('F', "Flip all bits on a port",            () => FlipPort(arduino)),
                 ('T', "Generate traffic (for scope/logic analyzer)", () => GenerateTraffic(arduino)),
                 ('I', "I2C bus diagnostic (SDA/SCL stuck/floating check)", () => I2CDiag(arduino)),
@@ -49,16 +49,6 @@ static class BenchTestSession
         if (input is "A" or "B") { port = input[0]; return true; }
         Console.WriteLine("  Must be A or B.");
         port = 'A';
-        return false;
-    }
-
-    static bool TryPromptBit(out int bit)
-    {
-        Console.Write("Bit (0-7): ");
-        string? input = Console.ReadLine()?.Trim();
-        if (int.TryParse(input, out bit) && bit is >= 0 and <= 7) return true;
-        Console.WriteLine("  Must be 0-7.");
-        bit = 0;
         return false;
     }
 
@@ -222,35 +212,21 @@ static class BenchTestSession
         Console.WriteLine();
     }
 
-    static void WatchPort(ArduinoDevice arduino)
+    // MCP23017 register addresses (BANK=0, the power-on default).
+    static byte IodirReg(char port) => port == 'A' ? (byte)0x00 : (byte)0x01;
+    static byte OlatReg(char port) => port == 'A' ? (byte)0x14 : (byte)0x15;
+
+    // Hex plus one column per bit, bit 7 first (matches the hex digit order).
+    // `labels` optionally renders each bit as text (e.g. in/out) instead of 0/1.
+    static void PrintBits(string name, int v, Func<bool, string>? labels = null)
     {
-        Console.WriteLine();
-        if (!TryPromptByte("Virtual address", out byte vaddr)) return;
-        if (!TryPromptPort(out char port)) return;
-        Console.Write("Poll interval in ms [200]: ");
-        string? input = Console.ReadLine()?.Trim();
-        int intervalMs = int.TryParse(input, out int ms) && ms > 0 ? ms : 200;
-
-        Console.WriteLine($"Watching 0x{vaddr:X2} port {port} every {intervalMs}ms -- prints only on change.");
-        Console.WriteLine("Press any key to stop.");
-
-        int last = -2; // never equals a real read (-1) or any byte value, forces first print
-        while (!Console.KeyAvailable)
-        {
-            int v = arduino.McpReadPort(vaddr, port);
-            if (v != last)
-            {
-                Console.WriteLine(v >= 0
-                    ? $"  0x{vaddr:X2} port {port} = 0x{v:X2}  ({Convert.ToString(v, 2).PadLeft(8, '0')})"
-                    : "  No response.");
-                last = v;
-            }
-            Thread.Sleep(intervalMs);
-        }
-        if (Console.KeyAvailable) Console.ReadKey(intercept: true);
-
-        Console.WriteLine();
+        labels ??= b => b ? "1" : "0";
+        var cols = Enumerable.Range(0, 8).Reverse().Select(i => labels((v & (1 << i)) != 0).PadLeft(4));
+        Console.WriteLine($"  {name,-6} 0x{v:X2}  {string.Join("", cols)}");
     }
+
+    static void PrintBitHeader() =>
+        Console.WriteLine($"  {"",-6}       {string.Join("", Enumerable.Range(0, 8).Reverse().Select(i => $"b{i}".PadLeft(4)))}");
 
     static void ReadPort(ArduinoDevice arduino)
     {
@@ -258,40 +234,109 @@ static class BenchTestSession
         if (!TryPromptByte("Virtual address", out byte vaddr)) return;
         if (!TryPromptPort(out char port)) return;
 
-        int v = arduino.McpReadPort(vaddr, port);
-        if (v < 0) { Console.WriteLine("  No response."); return; }
-        Console.WriteLine($"  0x{vaddr:X2} port {port} = 0x{v:X2}  ({Convert.ToString(v, 2).PadLeft(8, '0')})");
-        Console.WriteLine();
-    }
-
-    static void SetDirection(ArduinoDevice arduino)
-    {
-        Console.WriteLine();
-        Console.WriteLine("Mask bit = 1 -> input, 0 -> output (matches MCP23017 IODIR directly).");
-        if (!TryPromptByte("Virtual address", out byte vaddr)) return;
-        if (!TryPromptPort(out char port)) return;
-        if (!TryPromptByte("IODIR mask", out byte mask)) return;
-
-        Console.WriteLine(arduino.McpSetDirection(vaddr, port, mask)
-            ? $"  Done. 0x{vaddr:X2} port {port} IODIR = 0x{mask:X2}."
-            : "  Failed -- no response.");
-        Console.WriteLine();
-    }
-
-    static void SetBit(ArduinoDevice arduino)
-    {
-        Console.WriteLine();
-        if (!TryPromptByte("Virtual address", out byte vaddr)) return;
-        if (!TryPromptPort(out char port)) return;
-        if (!TryPromptBit(out int bit)) return;
-        Console.Write("On or off (1/0): ");
+        Console.Write("Poll interval in ms [200]: ");
         string? input = Console.ReadLine()?.Trim();
-        if (input != "0" && input != "1") { Console.WriteLine("  Must be 1 or 0."); return; }
-        bool on = input == "1";
+        int intervalMs = int.TryParse(input, out int ms) && ms > 0 ? ms : 200;
 
-        Console.WriteLine(arduino.McpSetBit(vaddr, port, bit, on)
-            ? $"  Done. 0x{vaddr:X2} port {port} bit {bit} = {(on ? "1" : "0")}."
-            : "  Failed -- no response.");
+        Console.WriteLine($"  0x{vaddr:X2} port {port}, every {intervalMs}ms -- new line on each change. Any key to stop.");
+        PrintBitHeader();
+
+        int last = -2; // never equals a real read (-1) or any byte value, forces first print
+        while (!Console.KeyAvailable)
+        {
+            int v = arduino.McpReadPort(vaddr, port);
+            if (v != last)
+            {
+                if (v >= 0) PrintBits("GPIO", v);
+                else Console.WriteLine("  No response.");
+                last = v;
+            }
+            Thread.Sleep(intervalMs);
+        }
+        Console.ReadKey(intercept: true);
+        Console.WriteLine();
+    }
+
+    static void SetDirection(ArduinoDevice arduino) =>
+        ReadSetMask(arduino, "IODIR", "bit 1 = input, 0 = output", IodirReg, b => b ? "in" : "out", arduino.McpSetDirection);
+
+    // Only has an effect on bits configured as inputs (~100k internal pull-up).
+    static void SetPullup(ArduinoDevice arduino) =>
+        ReadSetMask(arduino, "GPPU", "bit 1 = pull-up on, 0 = off; inputs only", port => port == 'A' ? (byte)0x0C : (byte)0x0D,
+            b => b ? "on" : "-", arduino.McpSetPullup);
+
+    // Shared read-show-then-optionally-write flow for a per-port mask register.
+    static void ReadSetMask(ArduinoDevice arduino, string reg, string legend, Func<char, byte> regAddr,
+        Func<bool, string> labels, Func<byte, char, byte, bool> write)
+    {
+        Console.WriteLine();
+        if (!TryPromptByte("Virtual address", out byte vaddr)) return;
+        if (!TryPromptPort(out char port)) return;
+
+        int current = arduino.McpReadRegister(vaddr, regAddr(port));
+        if (current < 0) { Console.WriteLine("  No response."); return; }
+        Console.WriteLine($"  0x{vaddr:X2} port {port} {reg} ({legend}):");
+        PrintBitHeader();
+        PrintBits(reg, current, labels);
+
+        Console.Write($"New {reg} mask (hex, Enter = keep): ");
+        string? input = Console.ReadLine()?.Trim();
+        if (string.IsNullOrEmpty(input)) { Console.WriteLine("  Unchanged."); Console.WriteLine(); return; }
+        if (!byte.TryParse(input, System.Globalization.NumberStyles.HexNumber, null, out byte mask))
+        {
+            Console.WriteLine("  Not a valid hex byte.");
+            return;
+        }
+
+        if (!write(vaddr, port, mask)) { Console.WriteLine("  Failed -- no response."); return; }
+        int readBack = arduino.McpReadRegister(vaddr, regAddr(port));
+        if (readBack < 0) { Console.WriteLine("  Written, but read-back failed."); return; }
+        PrintBits(reg, readBack, labels);
+        Console.WriteLine();
+    }
+
+    // Toggles against OLAT (the output latch), not GPIO: GPIO is the live pin
+    // level, which for an output driving a load can read back differently from
+    // what was written. MBIT also forces the bit to output, so this works on
+    // a bit that's currently configured as input.
+    static void ToggleBit(ArduinoDevice arduino)
+    {
+        Console.WriteLine();
+        if (!TryPromptByte("Virtual address", out byte vaddr)) return;
+        if (!TryPromptPort(out char port)) return;
+
+        Console.WriteLine($"  0x{vaddr:X2} port {port}:");
+        PrintBitHeader();
+        int olat = arduino.McpReadRegister(vaddr, OlatReg(port));
+        if (olat < 0) { Console.WriteLine("  No response."); return; }
+        PrintBits("OLAT", olat);
+        PrintGpio();
+
+        // GPIO = actual pin level; OLAT = what was commanded. A mismatch on
+        // an output bit means something external is overriding the pin.
+        void PrintGpio()
+        {
+            int gpio = arduino.McpReadPort(vaddr, port);
+            if (gpio < 0) Console.WriteLine("  GPIO   read failed.");
+            else PrintBits("GPIO", gpio);
+        }
+
+        while (true)
+        {
+            Console.Write("Bit to toggle (0-7, Enter = done): ");
+            string? input = Console.ReadLine()?.Trim();
+            if (string.IsNullOrEmpty(input)) break;
+            if (!int.TryParse(input, out int bit) || bit is < 0 or > 7) { Console.WriteLine("  Must be 0-7."); continue; }
+
+            bool on = (olat & (1 << bit)) == 0;
+            if (!arduino.McpSetBit(vaddr, port, bit, on)) { Console.WriteLine("  Failed -- no response."); continue; }
+
+            int after = arduino.McpReadRegister(vaddr, OlatReg(port));
+            if (after < 0) { Console.WriteLine($"  Bit {bit} -> {(on ? 1 : 0)}, but read-back failed."); continue; }
+            olat = after;
+            PrintBits("OLAT", olat);
+            PrintGpio();
+        }
         Console.WriteLine();
     }
 }

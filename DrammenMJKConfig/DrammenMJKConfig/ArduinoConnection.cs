@@ -33,11 +33,40 @@ sealed class ArduinoConnection : IDisposable
         _readThread.Start();
     }
 
-    public void Send(char c) => _port.Write(c.ToString());
+    public void Send(char c) { if (EnsureOpen()) _port.Write(c.ToString()); }
 
+    // A dropped write (port gone) is treated like no response -- callers
+    // already handle a null reply -- instead of crashing the whole tool.
     public void SendLine(string line)
     {
-        _port.WriteLine(line);
+        if (!EnsureOpen()) return;
+        try { _port.WriteLine(line); }
+        catch (Exception ex) when (ex is IOException or InvalidOperationException or UnauthorizedAccessException)
+        {
+            Console.WriteLine($"\r[!] Write failed: {ex.Message}");
+        }
+    }
+
+    // The USB serial port has been seen to drop and reappear mid-session
+    // (same COM name). Reopen it transparently on the next command. Opening
+    // resets the Uno (DTR), so wait for it to boot before sending anything.
+    bool EnsureOpen()
+    {
+        if (_port.IsOpen && _readThread is { IsAlive: true }) return true;
+        Console.WriteLine($"\r[!] {_port.PortName} closed -- reconnecting...");
+        try
+        {
+            if (_port.IsOpen) _port.Close();
+            Open();
+            Thread.Sleep(2000); // ponytail: fixed boot wait, poll PING if it proves too short/long
+            Console.WriteLine($"\r[!] Reconnected on {_port.PortName}.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"\r[!] Reconnect failed: {ex.Message} -- check the USB cable, then retry.");
+            return false;
+        }
     }
 
     // Redirect Arduino output into a queue instead of printing it.

@@ -16,11 +16,6 @@ namespace DrammenMJKConfig;
 // RunTrackDetection. See PLAN_Phase1.md, Command mode.
 static class CommandSession
 {
-    // Same motor, same ~5s observed travel time as MotorScan's
-    // FeedbackTimeoutMs -- kept consistent so normal operation doesn't
-    // spuriously time out right at the edge of a real throw.
-    const int TimeoutMs = 10000;
-
     public static void Run(ArduinoDevice arduino)
     {
         Console.WriteLine();
@@ -74,151 +69,83 @@ static class CommandSession
         }
     }
 
+    // One key per motor (1, 2, 3...), no Enter: each press flips that motor's
+    // driver bit, then the list redraws. Motor and feedback are shown and
+    // handled independently -- a motor must stay drivable even with broken
+    // or missing feedback (feedback is for the panel indicators). So nothing
+    // here waits on feedback: "Motor" is the commanded driver state (OLATB
+    // bit, mapped to Rett/Avvik via the scanned polarity), "Feedback" is the
+    // live end-position contacts (SR). Unscanned motors fall back to the
+    // declared motor bit, shown raw as H/L, with no feedback mapping.
     static void RunMotors(ArduinoDevice arduino, BoardScb scb)
     {
-        // Switch numbers are typed directly rather than picked from an
-        // indexed menu -- "5/6" is two physically-coupled switches sharing
-        // one motor/feedback pair, so either "5" or "6" must resolve to it.
-        var numberToLabel = new Dictionary<string, string>();
-        foreach (var sw in scb.Switches)
-            foreach (string token in sw.Label.Split('/'))
-                numberToLabel[token] = sw.Label;
+        const byte OlatB = 0x15;
+        int count = Math.Min(scb.Switches.Count, 9); // ponytail: single-key 1-9, no board has more yet
+
+        // Per motor: slot (null = not scanned) and where its driver bit is.
+        var motors = Enumerable.Range(0, count).Select(i =>
+        {
+            if (BoardConfig.TryFindSlotByLabel(scb.Switches[i].Label, out int slot)
+                && SwitchSlotData.Read(arduino, slot) is { IsConfigured: true } d)
+                return (Slot: (int?)slot, VAddr: d.MotorVAddr, Bit: (int)d.MotorBit, Polarity: (int?)d.Polarity);
+            return (Slot: (int?)null, VAddr: scb.VirtualAddress, Bit: scb.MotorBitFor(i), Polarity: (int?)null);
+        }).ToArray();
+
+        // -1 = I2C error, else 0/1.
+        int MotorLevel(int i)
+        {
+            int olat = arduino.McpReadRegister(motors[i].VAddr, OlatB);
+            return olat < 0 ? -1 : (olat >> motors[i].Bit) & 1;
+        }
+
+        string MotorText(int i, int level) =>
+            level < 0 ? "?" :
+            motors[i].Polarity is int pol ? (level == pol ? "Rett" : "Avvik") :
+            $"B{motors[i].Bit}={(level == 1 ? "H" : "L")}";
+
+        string[] Snapshot() => Enumerable.Range(0, count).Select(i =>
+        {
+            string fb = motors[i].Slot is int s ? arduino.ReadSwitch(s).ToString() : "-  (not scanned)";
+            return $"  {i + 1} = {scb.Switches[i].Label,-6} Motor: {MotorText(i, MotorLevel(i)),-7} Feedback: {fb}";
+        }).ToArray();
+
+        // Live table: polled every 200ms and reprinted (after a blank line)
+        // whenever any motor or feedback value changes -- so flipping a
+        // feedback switch by hand shows up without pressing anything. A
+        // number key toggles that motor; the next poll picks up the change.
+        // Appends rather than redrawing in place: cursor repositioning isn't
+        // honored by every terminal this runs in.
+        Console.WriteLine();
+        Console.WriteLine($"{scb.Name} motors -- press a number to toggle the motor (Esc = board menu):");
+        while (Console.KeyAvailable) Console.ReadKey(intercept: true); // drop stale keys
+        string[]? shown = null;
 
         while (true)
         {
-            // Mark which switches are actually configured (motor found and
-            // stored) vs. not -- useful both here during bring-up (only some
-            // motors physically installed yet) and later for fault-finding
-            // (a switch that should be configured but shows "?" points at
-            // EEPROM having been cleared or never scanned).
-            var listing = scb.Switches.Select(s =>
+            var now = Snapshot();
+            if (shown == null || !now.SequenceEqual(shown))
             {
-                bool configured = BoardConfig.TryFindSlotByLabel(s.Label, out int slot)
-                    && arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) != ArduinoDevice.Unset;
-                return configured ? s.Label : $"{s.Label}?";
-            });
-
-            Console.WriteLine();
-            Console.WriteLine($"{scb.Name} switches: " + string.Join("  ", listing) + "   (? = not configured)");
-            Console.Write("Switch number (blank or Esc for board menu): ");
-
-            string? input = ReadLineOrEsc();
-            if (input == null) { Console.WriteLine(); return; }
-
-            if (!numberToLabel.TryGetValue(input, out string? label))
-            {
-                Console.WriteLine("  Unknown switch number.");
-                continue;
-            }
-
-            if (!BoardConfig.TryFindSlotByLabel(label, out int slot)) continue;
-
-            bool configured = arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) != ArduinoDevice.Unset;
-
-            if (!configured)
-            {
-                // No trained feedback mapping yet (Motor scan hasn't stored this
-                // slot) -- that only blocks the Rett/Avvik-confirmed drive below,
-                // not just running the motor. Fire it raw, the same way Motor
-                // scan itself does before it knows which switch moved, and
-                // report whatever the feedback chip saw (there may be none
-                // wired up yet, which is fine -- that's exactly the case this
-                // path exists for).
-                int swIndex = scb.Switches.ToList().FindIndex(s => s.Label == label);
-                byte vaddr = scb.VirtualAddress;
-                int motorBit = scb.MotorBitFor(swIndex);
-
-                int baseline = arduino.McpReadPort(vaddr, 'A');
-                int restOlatB = arduino.McpReadPort(vaddr, 'B');
-                if (baseline < 0 || restOlatB < 0)
-                {
-                    Console.WriteLine("  I2C error reading board state.");
-                    Console.WriteLine();
-                    continue;
-                }
-                bool restState = ((restOlatB >> motorBit) & 1) != 0;
-                bool fireState = !restState;
-
-                Console.WriteLine($"{label} has no trained feedback mapping (Motor scan not run/overwritten for this slot) --");
-                Console.WriteLine($"firing raw: motor bit {motorBit} on 0x{vaddr:X2} ({restState} -> {fireState}).");
-
-                if (!arduino.McpSetBit(vaddr, 'B', motorBit, fireState))
-                {
-                    Console.WriteLine("  I2C error firing motor.");
-                    Console.WriteLine();
-                    continue;
-                }
-
-                int changed = arduino.McpPollChange(vaddr, 'A', (byte)baseline, TimeoutMs);
-                if (changed < 0)
-                    Console.WriteLine($"  Feedback 0x{vaddr:X2}: no change seen within {TimeoutMs}ms (nothing wired yet, or motor didn't move).");
-                else
-                    ReportFeedbackChange(vaddr, baseline, changed);
-
                 Console.WriteLine();
-                continue;
+                foreach (var line in now) Console.WriteLine(line);
+                shown = now;
             }
 
-            var current = arduino.ReadSwitch(slot);
-            Console.WriteLine($"Currently at: {current}");
+            if (!Console.KeyAvailable) { Thread.Sleep(200); continue; }
+            var key = Console.ReadKey(intercept: true);
+            if (key.Key == ConsoleKey.Escape) { Console.WriteLine(); return; }
 
-            // No point offering to drive to the position it's already
-            // confirmed at -- only offer that when current is Between/Fault/
-            // unknown, where neither R nor A is "where it already is".
-            bool canR = current != ArduinoDevice.SwitchState.Rett;
-            bool canA = current != ArduinoDevice.SwitchState.Avvik;
+            int idx = key.KeyChar - '1';
+            if (idx < 0 || idx >= count) continue;
 
-            char pos;
-            if (canR && canA)
+            int level = MotorLevel(idx);
+            // McpSetBit (MBIT) also forces the bit to output, so this works
+            // regardless of what the last hardware.json upload left in IODIR.
+            if (level < 0 || !arduino.McpSetBit(motors[idx].VAddr, 'B', motors[idx].Bit, level == 0))
             {
-                Console.Write($"Drive {label} to:  R = Rett   A = Avvik  (or Esc to cancel): ");
-                pos = char.ToUpper(ReadChar(ch => char.ToUpper(ch) == 'R' || char.ToUpper(ch) == 'A' || ch == EscKey));
+                Console.WriteLine($"  I2C error driving motor {idx + 1}.");
+                shown = null; // reprint the table under the message
             }
-            else
-            {
-                // Only one destination is possible -- no need to make them pick a letter.
-                pos = canR ? 'R' : 'A';
-                string target = pos == 'R' ? "Rett" : "Avvik";
-                Console.Write($"Toggle {label} to {target} -- any key to confirm, Esc to cancel: ");
-                char key = ReadChar(_ => true);
-                if (key == EscKey) pos = EscKey;
-            }
-            if (pos == EscKey) { Console.WriteLine("[Esc]"); Console.WriteLine(); continue; }
-            Console.WriteLine(pos);
-
-            byte fbVAddr = arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackVAddr + slot);
-            int fbBefore = arduino.McpReadPort(fbVAddr, 'A');
-
-            var result = arduino.DriveSwitch(slot, pos, TimeoutMs);
-            Console.WriteLine($"Result: {result}");
-
-            int fbAfter = arduino.McpReadPort(fbVAddr, 'A');
-            ReportFeedbackChange(fbVAddr, fbBefore, fbAfter);
-
-            Console.WriteLine();
         }
-    }
-
-    // "Which feedback address changed" report shared by the trained
-    // (Rett/Avvik-confirmed) and raw firing paths above -- names the vaddr
-    // and the GPIOA bits that flipped, so cross-wiring between switches
-    // (two slots driving the same bit, wrong feedback chip, etc.) is visible
-    // immediately instead of only showing up as "wrong switch moved".
-    static void ReportFeedbackChange(byte vaddr, int before, int after)
-    {
-        if (before < 0 || after < 0)
-        {
-            Console.WriteLine($"  Feedback 0x{vaddr:X2}: I2C error reading GPIOA.");
-            return;
-        }
-        if (before == after)
-        {
-            Console.WriteLine($"  Feedback 0x{vaddr:X2}: no change (GPIOA stayed 0x{before:X2}).");
-            return;
-        }
-        int diff = before ^ after;
-        var bits = Enumerable.Range(0, 8).Where(b => ((diff >> b) & 1) != 0).ToList();
-        Console.WriteLine($"  Feedback 0x{vaddr:X2}: GPIOA 0x{before:X2} -> 0x{after:X2} (bit{(bits.Count > 1 ? "s" : "")} {string.Join(",", bits)} changed).");
     }
 
     // Wiring bring-up tool. Holds an explicit model of every output bit on

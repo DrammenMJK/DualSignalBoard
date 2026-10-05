@@ -18,7 +18,7 @@
       "name": "Fossli Motors Hoyre",
       "category": "SCB",
       "bus": 2,
-      "chips": ["0x20"],
+      "chips": ["0x24"],
       "motorBitFirst": 0,
       "switches": ["1", "3", "5/6", "7"],
       "dreieskive": { "base": 4, "upper": 5 },
@@ -28,13 +28,14 @@
       "name": "Fossli Motors Venstre",
       "category": "SCB",
       "bus": 2,
-      "chips": ["0x21"],
+      "chips": ["0x20"],
       "motorBits": [1, 3, 5],
       "switches": ["101", "2", "4"],
       "dreieskive": null,
       "statusLedBit": 6,
       "inverterEnable": { "port": "A", "bit": 7 },
-      "signalBits": [0, 2, 4]
+      "signalBits": [0, 2, 4],
+      "trackDetectBit": 6
     },
     {
       "name": "Sidespor Motors",
