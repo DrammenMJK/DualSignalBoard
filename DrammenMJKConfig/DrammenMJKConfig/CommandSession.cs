@@ -5,13 +5,11 @@ namespace DrammenMJKConfig;
 // Operate a board: pick it (SCB) first, then Motors, Signals, Status Light,
 // Motor Pin Test, Input Test, or Track Detection, then loop within that
 // section so repeated checks don't need re-navigating each time. Motors
-// never touch port/bit/vaddr directly — resolves label -> slot via
-// BoardConfig, then DriveSwitch/ReadSwitch (SW/SR) do all the
-// port/bit/polarity resolution in firmware. Signals, the status light, and
-// Motor Pin Test go through raw McpSetBit instead (see
-// RunSignals/RunStatusLight/RunMotorPinTest) -- there's no "drive and wait"
-// concept for a lamp, and Motor Pin Test deliberately skips that logic too,
-// for verifying raw wiring during bring-up. Input Test and Track Detection
+// flip the motor's one drive bit (McpSetBit) and never wait for feedback --
+// feedback (SR) is only displayed, the same split as the runtime, where it
+// just lights the panel LEDs (see .claude/stillverk.chatlog.ned, "Motor
+// drive vs feedback"). Signals, the status light, and Motor Pin Test also
+// write raw bits with McpSetBit. Input Test and Track Detection
 // are read-only live polls (McpReadPort) -- see RunInputTest/
 // RunTrackDetection. See PLAN_Phase1.md, Command mode.
 static class CommandSession

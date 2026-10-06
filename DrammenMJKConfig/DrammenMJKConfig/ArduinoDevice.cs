@@ -192,20 +192,12 @@ sealed class ArduinoDevice
         Ask($"MBIT {vaddr:X2} {port} {bit} {(val ? 1 : 0)}") == "OK";
 
     // -------------------------------------------------------------------------
-    // Switch-table commands — used by Command mode. Never mention port/bit.
+    // Switch-table read — feedback position of a scanned pens (SR). Driving a
+    // pens is just its one motor bit (McpSetBit); nothing waits on feedback
+    // outside Motor scan.
     // -------------------------------------------------------------------------
 
-    public enum SwitchState { Rett, Avvik, Between, Fault, Timeout, Error }
-
-    public SwitchState DriveSwitch(int slot, char pos, int timeoutMs)
-    {
-        string? resp = Ask($"SW {slot} {pos} {timeoutMs}", timeoutMs + 1500);
-        if (resp == null) return SwitchState.Error;
-        if (resp == "TIMEOUT") return SwitchState.Timeout;
-        if (resp.StartsWith("ERR", StringComparison.Ordinal)) return SwitchState.Error;
-        var p = resp.Split(' ');
-        return p.Length == 2 && p[0] == "OK" ? ParseState(p[1]) : SwitchState.Error;
-    }
+    public enum SwitchState { Rett, Avvik, Between, Fault, Error }
 
     public SwitchState ReadSwitch(int slot)
     {

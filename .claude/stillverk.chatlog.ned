@@ -36,6 +36,23 @@
   corrected once, by reading live feedback + the live OLATB bit and
   recomputing -- the fix itself only applies to scans done after it landed.
 
+## Motor drive vs feedback -- only config waits
+
+- Driving a pens is ONE bit: set it for Rett or Avvik (polarity from the
+  scan). Nothing else happens -- no waiting, no timeout, no retry, no
+  "did it arrive" check. Applies to the runtime (panel switch -> motor) and
+  to Operate mode alike.
+- Feedback is independent of the drive: it only lights the SVB panel LEDs
+  (Rett LED / Avvik LED). The OPERATOR watches those LEDs and runs the train
+  once the correct one is lit. If the pens never reaches an end, both LEDs
+  stay off -- the operator then knows the Tortoise motor or a wire is
+  faulty. Nothing for the software to do about it.
+- The ONLY place that waits for feedback is configuration (Motor scan),
+  because that is how it finds which feedback pair belongs to which motor.
+- Consequence: `SW`'s built-in wait (it returns on either end position, not
+  the target) is irrelevant -- nothing at runtime will use a "reached
+  target" result. Not a bug to fix.
+
 ## CommandSession (Operate mode) UI scope
 
 - The "only offer the position not already confirmed" / "Toggle position"
