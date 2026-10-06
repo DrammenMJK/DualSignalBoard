@@ -176,4 +176,20 @@ public class BoardConfigTests
         Assert.That(scb.MotorBitFor(0), Is.EqualTo(0));
         Assert.That(scb.MotorBitFor(3), Is.EqualTo(3));
     }
+
+    [Test]
+    public void ApplyBoardsFile_SameLabelOnTwoScbs_IsRejected()
+    {
+        var file = new BoardsFile
+        {
+            Boards =
+            [
+                new BoardDeclaration { Name = "Fossli Motors Hoyre", Category = "SCB", Chips = ["0x20"], Switches = ["1", "3"] },
+                new BoardDeclaration { Name = "Havna Motors", Category = "SCB", Chips = ["0x20"], Switches = ["1", "2"] },
+            ],
+        };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BoardConfig.ApplyBoardsFile(file));
+        Assert.That(ex!.Message, Does.Contain("'1' on Fossli Motors Hoyre and Havna Motors"));
+    }
 }

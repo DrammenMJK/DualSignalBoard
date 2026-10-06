@@ -162,6 +162,12 @@ static class BoardConfig
             .Select(b => ToBoardScb(b, testMode))
             .ToList();
 
+        var dupes = scbs.SelectMany(s => s.Switches.Select(w => (w.Label, s.Name)))
+            .GroupBy(x => x.Label).Where(g => g.Count() > 1).ToList();
+        if (dupes.Count > 0)
+            throw new InvalidOperationException("Pens labels must be unique across all SCBs (everything finds a pens by its label). Duplicates: " +
+                string.Join("; ", dupes.Select(g => $"'{g.Key}' on {string.Join(" and ", g.Select(x => x.Name))}")));
+
         Svb = new BoardSvb(file.Svb.Name, file.Svb.Number, scbs);
         AllBoards = file.Boards;
         PanelBoards = file.Boards

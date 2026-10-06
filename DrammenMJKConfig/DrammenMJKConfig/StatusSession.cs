@@ -89,19 +89,8 @@ static class StatusSession
 
         var allLabels = BoardConfig.AllSwitchSlots().Select(s => s.Label).ToList();
 
-        var lines = new List<string>();
-        arduino.SystemConfigDownloadStart();
-        try
-        {
-            while (true)
-            {
-                string? line = arduino.GetNextSystemConfigLine(2000);
-                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return (0, allLabels.Count); }
-                if (line == "END") break;
-                lines.Add(line);
-            }
-        }
-        finally { arduino.SystemConfigDownloadFinish(); }
+        var lines = arduino.SystemConfigDownload();
+        if (lines == null) { Console.WriteLine("  Timeout waiting for device."); return (0, allLabels.Count); }
 
         var file = new SystemConfigFile();
         SystemConfigJson.ApplyDownloadLines(file, lines);

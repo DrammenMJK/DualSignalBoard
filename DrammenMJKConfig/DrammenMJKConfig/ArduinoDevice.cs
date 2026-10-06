@@ -363,17 +363,24 @@ sealed class ArduinoDevice
         return SystemConfigUploadFinish();
     }
 
-    public bool SystemConfigDownloadStart()
+    // Whole SCD dump as lines (without the END marker). Null on timeout.
+    public List<string>? SystemConfigDownload()
     {
+        var lines = new List<string>();
         _conn.StartCapture();
-        _conn.SendLine("SCD");
-        return true;
+        try
+        {
+            _conn.SendLine("SCD");
+            while (true)
+            {
+                string? line = _conn.GetCapturedLine(2000)?.Trim();
+                if (line == null) return null;
+                if (line == "END") return lines;
+                lines.Add(line);
+            }
+        }
+        finally { _conn.StopCapture(); }
     }
-
-    public string? GetNextSystemConfigLine(int timeoutMs = 2000) =>
-        _conn.GetCapturedLine(timeoutMs)?.Trim();
-
-    public void SystemConfigDownloadFinish() => _conn.StopCapture();
 
     // -------------------------------------------------------------------------
     // Misc

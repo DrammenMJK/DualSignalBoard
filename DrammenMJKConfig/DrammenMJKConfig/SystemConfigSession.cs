@@ -138,19 +138,8 @@ static class SystemConfigSession
         string path = PromptPath();
         SystemConfigFile file = LoadOrNew(path);
 
-        var lines = new List<string>();
-        arduino.SystemConfigDownloadStart();
-        try
-        {
-            while (true)
-            {
-                string? line = arduino.GetNextSystemConfigLine(2000);
-                if (line == null) { Console.WriteLine("Timeout waiting for device."); return; }
-                if (line == "END") break;
-                lines.Add(line);
-            }
-        }
-        finally { arduino.SystemConfigDownloadFinish(); }
+        var lines = arduino.SystemConfigDownload();
+        if (lines == null) { Console.WriteLine("Timeout waiting for device."); return; }
 
         SystemConfigJson.ApplyDownloadLines(file, lines);
 

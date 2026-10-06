@@ -17,10 +17,94 @@ static class PanelScanSession
 {
     const byte IodirA = 0x00, IodirB = 0x01;
 
-    // Pens labels the panel can control -- every switch on this SVB's SCBs.
-    // ponytail: single-key 1-9 menus, Fossli has 7 pens; letters if a panel ever has more.
-    static List<string> PensLabels() =>
-        BoardConfig.AllSwitchSlots().Select(s => s.Label).Take(9).ToList();
+    // Single-key choices, hexadecimal 0-F -- 16 per list (per SCB / per
+    // SCB list), past the old 1-9 cap. Havna, the largest, has 11 pens.
+    const string Keys = "0123456789ABCDEF";
+
+    static int ReadKeyIndex(int count)
+    {
+        char c = char.ToUpper(ReadChar(ch => ch == EscKey || Keys.IndexOf(char.ToUpper(ch)) is int i && i >= 0 && i < count));
+        Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
+        return c == EscKey ? -1 : Keys.IndexOf(c);
+    }
+
+    // Picks a pens in two steps -- SCB, then a pens on it -- so any number of
+    // SCBs/pens fits, and a panel can drive LEDs for pens on another SVB's
+    // SCBs (Havna LEDs on the Fossli panel). The SCB step is skipped when
+    // only one SCB has a pens to offer. `mark` decorates a label (e.g. * =
+    // already configured). Null on Esc.
+    internal static string? PickPens(Func<string, bool>? allowed = null, Func<string, string>? mark = null)
+    {
+        var scbs = BoardConfig.Svb.Scbs
+            .Select(s => (s.Name, Labels: s.Switches.Select(w => w.Label).Where(allowed ?? (_ => true)).ToList()))
+            .Where(g => g.Labels.Count > 0)
+            .ToList();
+        if (scbs.Count == 0) { Console.WriteLine("  No pens to pick."); return null; }
+
+        var scb = scbs[0];
+        if (scbs.Count > 1)
+        {
+            Console.Write("  SCB:  " + string.Join("  ", scbs.Select((g, i) => $"{Keys[i]}={g.Name}")) + "  (Esc = cancel): ");
+            int i = ReadKeyIndex(scbs.Count);
+            if (i < 0) return null;
+            scb = scbs[i];
+        }
+        Console.Write($"  Pens on {scb.Name}:  " + string.Join("  ", scb.Labels.Select((l, i) => $"{Keys[i]}={(mark ?? (x => x))(l)}")) + "  (Esc = cancel): ");
+        int p = ReadKeyIndex(scb.Labels.Count);
+        return p < 0 ? null : scb.Labels[p];
+    }
+
+    // Panel tables as the Arduino holds them (EEPROM is the source of truth).
+    internal static SystemConfigFile? ReadPanel(ArduinoDevice arduino)
+    {
+        var lines = arduino.SystemConfigDownload();
+        if (lines == null) { Console.WriteLine("  Timeout reading config from the Arduino."); return null; }
+        var file = new SystemConfigFile();
+        SystemConfigJson.ApplyDownloadLines(file, lines);
+        return file;
+    }
+
+    // Mirrors the panel tables into SystemConfig.json and sends `lines` to the Arduino.
+    internal static void Store(ArduinoDevice arduino, SystemConfigFile panel, List<string> lines)
+    {
+        var file = SystemConfigSession.LoadOrNew();
+        file.SvbSwitches = panel.SvbSwitches;
+        file.PanelLeds = panel.PanelLeds;
+        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
+        Console.WriteLine(arduino.SystemConfigSend(lines)
+            ? "Stored (SystemConfig.json + Arduino)."
+            : "Saved to SystemConfig.json, but the Arduino upload failed -- restore later with Config -> J.");
+    }
+
+    // Asks what an LED is. False on Esc; target null = unused/nothing lit.
+    internal static bool AskLedTarget(out string? target, out string? role)
+    {
+        target = role = null;
+        while (true)
+        {
+            Console.Write("  Which?  (P = pens, S = signal lamp, 0 = nothing lit/unused, Esc = abort): ");
+            char c = char.ToUpper(ReadChar(ch => ch == EscKey || ch == '0' || char.ToUpper(ch) is 'P' or 'S'));
+            Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
+            if (c == EscKey) return false;
+            if (c == '0') return true;
+            if (c == 'S')
+            {
+                Console.Write("  Signal lamp:  R = Red   1 = Green1   2 = Green2: ");
+                char s = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'R' || ch is '1' or '2'));
+                Console.WriteLine(s);
+                target = SystemConfigJson.SignalTarget;
+                role = s switch { 'R' => "red", '1' => "green1", _ => "green2" };
+                return true;
+            }
+            if (PickPens() is not { } label) continue; // Esc in the picker = ask again
+            Console.Write($"  {label}:  R = Rett   A = Avvik: ");
+            char r = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'R' or 'A'));
+            Console.WriteLine(r);
+            target = label;
+            role = r == 'R' ? "rett" : "avvik";
+            return true;
+        }
+    }
 
     static (string Name, IReadOnlyList<byte> VAddrs)? PickPanelBoard()
     {
@@ -52,7 +136,7 @@ static class PanelScanSession
         return pins;
     }
 
-    static string Pin(byte vaddr, char port, int bit) => $"0x{vaddr:X2} {port}{bit}";
+    internal static string Pin(byte vaddr, char port, int bit) => $"0x{vaddr:X2} {port}{bit}";
 
     // -------------------------------------------------------------------------
     // Step 1: panel LED scan
@@ -68,55 +152,55 @@ static class PanelScanSession
         if (Pins(arduino, board.VAddrs, wantInput: false) is not { } outputs) return;
         if (outputs.Count == 0) { Console.WriteLine("  No output pins -- upload hardware.json first?"); return; }
 
-        var labels = PensLabels();
-        string pensMenu = string.Join("  ", labels.Select((l, i) => $"{i + 1}={l}"));
-        var leds = new List<PanelLedEntry>();
+        if (ReadPanel(arduino) is not { } panel) return;
+        var vaddrs = board.VAddrs.Select(v => $"0x{v:X2}").ToHashSet();
+        bool OnThisBoard(PanelLedEntry l) => vaddrs.Contains(l.VAddr ?? "");
 
-        foreach (var (v, port, bit) in outputs)
+        // Resume: LEDs this board already has can be kept and their pins skipped.
+        var leds = new List<PanelLedEntry>();
+        int existing = panel.PanelLeds.Count(OnThisBoard);
+        if (existing > 0)
+        {
+            Console.Write($"{existing} LED(s) on this board are already configured.  K = keep them, scan only the rest   O = start over   Esc = cancel: ");
+            char k = char.ToUpper(ReadChar(ch => ch == EscKey || char.ToUpper(ch) is 'K' or 'O'));
+            Console.WriteLine(k == EscKey ? "[Esc]" : k.ToString());
+            if (k == EscKey) { Console.WriteLine(); return; }
+            if (k == 'K') leds.AddRange(panel.PanelLeds.Where(OnThisBoard));
+        }
+        var done = leds.Select(l => (l.VAddr, l.Port, l.Bit)).ToHashSet();
+        var todo = outputs.Where(p => !done.Contains(($"0x{p.VAddr:X2}", p.Port.ToString(), p.Bit))).ToList();
+        Console.WriteLine($"{todo.Count} output pin(s) to go. Pins answered 0 (unused) aren't stored, so a resumed scan asks them again.");
+
+        bool stopped = false;
+        foreach (var (v, port, bit) in todo)
         {
             arduino.McpSetBit(v, port, bit, true);
             Console.WriteLine();
-            Console.WriteLine($"  {Pin(v, port, bit)} lit.  Pens: {pensMenu}");
-            Console.Write("  Which?  (pens number, S = signal lamp, 0 = nothing lit/unused, Esc = abort): ");
-            char c = char.ToUpper(ReadChar(ch => ch == EscKey || ch == '0' || char.ToUpper(ch) == 'S'
-                || (ch >= '1' && ch <= '9' && ch - '1' < labels.Count)));
-            Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
-
-            string? target = null, role = null;
-            if (c == 'S')
-            {
-                Console.Write("  Signal lamp:  R = Red   1 = Green1   2 = Green2: ");
-                char s = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'R' || ch is '1' or '2'));
-                Console.WriteLine(s);
-                target = SystemConfigJson.SignalTarget;
-                role = s switch { 'R' => "red", '1' => "green1", _ => "green2" };
-            }
-            else if (c is >= '1' and <= '9')
-            {
-                Console.Write($"  {labels[c - '1']}:  R = Rett   A = Avvik: ");
-                char r = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'R' or 'A'));
-                Console.WriteLine(r);
-                target = labels[c - '1'];
-                role = r == 'R' ? "rett" : "avvik";
-            }
+            Console.WriteLine($"  {Pin(v, port, bit)} lit.");
+            bool answered = AskLedTarget(out string? target, out string? role);
             arduino.McpSetBit(v, port, bit, false);
 
-            if (c == EscKey) { Console.WriteLine("Panel LED scan aborted -- nothing stored."); Console.WriteLine(); return; }
+            if (!answered) { stopped = true; break; }
             if (target != null)
                 leds.Add(new PanelLedEntry { VAddr = $"0x{v:X2}", Port = port.ToString(), Bit = bit, Target = target, Role = role });
         }
 
+        if (stopped)
+        {
+            Console.Write($"Stopped. Store the {leds.Count} LED(s) so far, to continue later with K?  Y/N: ");
+            char y = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'Y' or 'N'));
+            Console.WriteLine(y);
+            if (y == 'N') { Console.WriteLine("Nothing stored."); Console.WriteLine(); return; }
+        }
+
         Console.WriteLine();
-        Console.WriteLine($"Found {leds.Count} LED(s):");
+        Console.WriteLine($"{leds.Count} LED(s) on this board:");
         foreach (var g in leds.GroupBy(l => l.Target))
             Console.WriteLine($"  {g.Key,-7} " + string.Join("  ", g.Select(l => $"{l.Role}={l.VAddr} {l.Port}{l.Bit}")));
 
-        var file = SystemConfigSession.LoadOrNew();
-        file.PanelLeds = leds;
-        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
-        Console.WriteLine(arduino.SystemConfigSend(SystemConfigJson.PanelLedLines(leds))
-            ? "Stored (SystemConfig.json + Arduino)."
-            : "Saved to SystemConfig.json, but the Arduino upload failed -- restore later with Config -> J.");
+        // Only this board's LEDs are replaced -- other panel boards' stay.
+        panel.PanelLeds = panel.PanelLeds.Where(l => !OnThisBoard(l)).Concat(leds).ToList();
+        Store(arduino, panel, SystemConfigJson.PanelLedLines(panel.PanelLeds));
         Console.WriteLine();
     }
 
@@ -151,9 +235,17 @@ static class PanelScanSession
             return r;
         }
 
-        var labels = PensLabels();
-        string pensMenu = string.Join("  ", labels.Select((l, i) => $"{i + 1}={l}"));
+        if (ReadPanel(arduino) is not { } panel) return;
+        // Resume: what's already assigned stays; flip only the remaining switches.
+        if (panel.SvbSwitches.Count > 0)
+            Console.WriteLine($"Already configured (kept unless reassigned): {string.Join(", ", panel.SvbSwitches.Keys)}");
+
+        // Which key (if any) already uses this input pin.
+        string? Owner(string vs, string ps, int bit) => panel.SvbSwitches.FirstOrDefault(kv =>
+            kv.Value.VAddr == vs && kv.Value.Port == ps && (kv.Value.Bit == bit || kv.Value.BitCw == bit || kv.Value.BitCcw == bit)).Key;
+
         var found = new Dictionary<string, SvbSwitchEntry>();
+        var cleared = new List<string>();
 
         while (true)
         {
@@ -189,16 +281,27 @@ static class PanelScanSession
             }
 
             var (v, port, bit, level) = changed[0];
-            Console.WriteLine($"  {Pin(v, port, bit)} changed to {(level == 1 ? "High" : "Low")}.  Pens: {pensMenu}");
-            Console.Write("  What is it?  (pens number, C = dreieskive CW, W = dreieskive CCW, G = green request, 0 = ignore): ");
-            char c = char.ToUpper(ReadChar(ch => ch == '0' || char.ToUpper(ch) is 'C' or 'W' or 'G'
-                || (ch >= '1' && ch <= '9' && ch - '1' < labels.Count)));
+            string vs = $"0x{v:X2}", ps = port.ToString();
+            string? owner = Owner(vs, ps, bit);
+            Console.WriteLine($"  {Pin(v, port, bit)} changed to {(level == 1 ? "High" : "Low")}{(owner != null ? $"  (currently: {owner})" : "")}.");
+            Console.Write("  What is it?  (P = pens, C = dreieskive CW, W = dreieskive CCW, G = green request, 0 = ignore): ");
+            char c = char.ToUpper(ReadChar(ch => ch == '0' || char.ToUpper(ch) is 'P' or 'C' or 'W' or 'G'));
             Console.WriteLine(c);
 
-            string vs = $"0x{v:X2}", ps = port.ToString();
-            if (c is >= '1' and <= '9')
+            // Pens already assigned get a * in the picker. Esc there = ignore this input.
+            string? label = c == 'P' ? PickPens(mark: l => panel.SvbSwitches.ContainsKey(l) ? l + "*" : l) : null;
+            if (c == 'P' && label == null) c = '0';
+
+            // Reassigning a pin moves it: the key that had it loses it.
+            if (c != '0' && owner != null && owner != SystemConfigJson.Dreieskive)
             {
-                string label = labels[c - '1'];
+                panel.SvbSwitches.Remove(owner);
+                found.Remove(owner);
+                cleared.Add(owner);
+            }
+
+            if (label != null)
+            {
                 Console.Write($"  Is the {label} panel switch now at Rett or Avvik?  R/A: ");
                 char r = char.ToUpper(ReadChar(ch => char.ToUpper(ch) is 'R' or 'A'));
                 Console.WriteLine(r);
@@ -207,7 +310,8 @@ static class PanelScanSession
             }
             else if (c is 'C' or 'W')
             {
-                var d = found.TryGetValue(SystemConfigJson.Dreieskive, out var e) ? e : new SvbSwitchEntry { VAddr = vs, Port = ps };
+                // Builds on a stored half (e.g. CW done before a restart).
+                var d = panel.SvbSwitches.TryGetValue(SystemConfigJson.Dreieskive, out var e) ? e : new SvbSwitchEntry { VAddr = vs, Port = ps };
                 if (d.VAddr != vs || d.Port != ps)
                     Console.WriteLine($"  Warning: CW and CCW are on different chips/ports ({d.VAddr} {d.Port} vs {vs} {ps}) -- the table holds one; keeping {vs} {ps}.");
                 d.VAddr = vs; d.Port = ps;
@@ -218,6 +322,7 @@ static class PanelScanSession
             {
                 found[SystemConfigJson.AskGreen] = new SvbSwitchEntry { VAddr = vs, Port = ps, Bit = bit };
             }
+            foreach (var (key, entry) in found) { panel.SvbSwitches[key] = entry; cleared.Remove(key); }
             // Let a released button / the operator's hand settle before the next baseline.
             Thread.Sleep(300);
         }
@@ -231,13 +336,10 @@ static class PanelScanSession
                 ? $"  {key,-10} {e.VAddr} {e.Port}  CW=bit{e.BitCw?.ToString() ?? "?"}  CCW=bit{e.BitCcw?.ToString() ?? "?"}"
                 : $"  {key,-10} {e.VAddr} {e.Port}{e.Bit}" + (e.Polarity is int p ? $"  Rett = {(p == 1 ? "High" : "Low")}" : ""));
 
-        // Merge: inputs not touched this run keep whatever was stored before.
-        var file = SystemConfigSession.LoadOrNew();
-        foreach (var (key, e) in found) file.SvbSwitches[key] = e;
-        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
-        Console.WriteLine(arduino.SystemConfigSend(SystemConfigJson.SvbSwitchLines(file.SvbSwitches))
-            ? "Stored (SystemConfig.json + Arduino)."
-            : "Saved to SystemConfig.json, but the Arduino upload failed -- restore later with Config -> J.");
+        // Only what changed this run is sent; everything else stays as stored.
+        var lines = SystemConfigJson.SvbSwitchLines(found);
+        lines.AddRange(cleared.Distinct().Select(SystemConfigJson.ClearSvbSwitchLine));
+        Store(arduino, panel, lines);
         Console.WriteLine();
     }
 }

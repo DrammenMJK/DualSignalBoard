@@ -27,11 +27,25 @@ static class SystemConfigJson
     public const string AskGreen = "askGreen";
     public const string SignalTarget = "signal";
 
-    // Ordered labels for svbSwitches, matching the slot order used on the wire:
-    // every switch label (same order as BoardConfig.AllSwitchSlots()), then
-    // "dreieskive", then "askGreen".
-    public static IReadOnlyList<string> SvbSwitchLabelOrder() =>
-        BoardConfig.AllSwitchSlots().Select(s => s.Label).Append(Dreieskive).Append(AskGreen).ToList();
+    // Panel input table slot -> key: a pens sits at its switch-table slot;
+    // dreieskive and askGreen have FIXED slots at the end of the 32-entry
+    // table, so adding pens to boards.json never moves them (their EEPROM
+    // entries would otherwise be read as some other input). Null = no key.
+    public const int SvbSlotCount = 32, DreieskiveSlot = 30, AskGreenSlot = 31;
+
+    public static IReadOnlyList<string?> SvbSwitchLabelOrder()
+    {
+        var keys = new string?[SvbSlotCount];
+        foreach (var (_, _, label, slot) in BoardConfig.AllSwitchSlots())
+        {
+            if (slot >= DreieskiveSlot)
+                throw new InvalidOperationException($"Too many pens for the panel table: '{label}' would need slot {slot} (max {DreieskiveSlot - 1}).");
+            keys[slot] = label;
+        }
+        keys[DreieskiveSlot] = Dreieskive;
+        keys[AskGreenSlot] = AskGreen;
+        return keys;
+    }
 
     // Panel LED role byte on the wire/in EEPROM <-> name in SystemConfig.json.
     public static readonly string[] LedRoles = ["rett", "avvik", "red", "green1", "green2"];
@@ -111,8 +125,7 @@ static class SystemConfigJson
         var svbLabels = SvbSwitchLabelOrder();
         for (int i = 0; i < svbLabels.Count; i++)
         {
-            string label = svbLabels[i];
-            if (!svbSwitches.TryGetValue(label, out var sv) || sv.VAddr == null) continue;
+            if (svbLabels[i] is not { } label || !svbSwitches.TryGetValue(label, out var sv) || sv.VAddr == null) continue;
 
             bool isDreieskive = label == Dreieskive;
             byte bitPrimary = (byte)(isDreieskive ? sv.BitCw ?? 0xFF : sv.Bit ?? 0);
@@ -126,6 +139,10 @@ static class SystemConfigJson
         return lines;
     }
 
+    // Marks one panel input slot unconfigured on the board (vaddr FF).
+    public static string ClearSvbSwitchLine(string label) =>
+        $"P {SvbSwitchLabelOrder().ToList().IndexOf(label)} FF A FF FF FF FF FF";
+
     // "Z" (clear the board's LED table) then one "Q" per LED, so a restore
     // leaves exactly the file's LEDs -- none left over from an earlier scan.
     // Nothing at all when the file has no LEDs, so an older SystemConfig.json
@@ -135,15 +152,20 @@ static class SystemConfigJson
         var lines = new List<string>();
         if (leds.Count == 0) return lines;
         lines.Add("Z");
-        for (int i = 0; i < leds.Count; i++)
-        {
-            var led = leds[i];
-            byte target = (byte)(led.Target != SignalTarget && BoardConfig.TryFindSlotByLabel(led.Target ?? "", out int s) ? s : 0xFF);
-            int role = Array.IndexOf(LedRoles, led.Role);
-            lines.Add($"Q {i} {Hex(led.VAddr)} {led.Port ?? "A"} {led.Bit ?? 0:X2} {target:X2} {role:X2}");
-        }
+        for (int i = 0; i < leds.Count; i++) lines.Add(LedLine(i, leds[i]));
         return lines;
     }
+
+    // One LED table entry -- also used on its own for single-LED edits.
+    public static string LedLine(int index, PanelLedEntry led)
+    {
+        byte target = (byte)(led.Target != SignalTarget && BoardConfig.TryFindSlotByLabel(led.Target ?? "", out int s) ? s : 0xFF);
+        int role = Array.IndexOf(LedRoles, led.Role);
+        return $"Q {index} {Hex(led.VAddr)} {led.Port ?? "A"} {led.Bit ?? 0:X2} {target:X2} {role:X2}";
+    }
+
+    // Marks one LED table entry unused on the board (vaddr FF).
+    public static string ClearLedLine(int index) => $"Q {index} FF A 00 FF 00";
 
     public static void ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
     {
@@ -179,8 +201,7 @@ static class SystemConfigJson
                     {
                         // P <slot> <vaddr> <port> <bitPri> <bitSec> <kind> <targetSlot> <pol>
                         int slot = int.Parse(parts[1]);
-                        if (slot < 0 || slot >= svbLabels.Count) break;
-                        string label = svbLabels[slot];
+                        if (slot < 0 || slot >= svbLabels.Count || svbLabels[slot] is not { } label) break;
                         var entry = new SvbSwitchEntry { VAddr = HexStr(parts[2]), Port = parts[3] };
                         if (label == Dreieskive)
                         {

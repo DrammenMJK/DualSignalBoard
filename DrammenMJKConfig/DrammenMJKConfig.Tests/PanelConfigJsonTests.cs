@@ -4,8 +4,8 @@ namespace DrammenMJKConfig.Tests;
 
 // SVB panel inputs ("P" lines) and panel LEDs ("Z"/"Q" lines) -- the SCU/SCD
 // wire format and its round trip through SystemConfig.json. Fixture slot
-// order: 1,3,5/6,7 (Hoyre) = 0-3, 101,2,4 (Venstre) = 4-6; svbSwitches add
-// dreieskive = 7, askGreen = 8.
+// order: 1,3,5/6,7 (Hoyre) = 0-3, 101,2,4 (Venstre) = 4-6; dreieskive and
+// askGreen have the fixed panel slots 30 and 31.
 public class PanelConfigJsonTests
 {
     [SetUp]
@@ -37,8 +37,8 @@ public class PanelConfigJsonTests
         {
             "P 2 20 A 02 FF 00 02 00", // 5/6: pens kind 0, target slot 2, Rett = Low
             "P 4 20 A 04 FF 00 04 01", // 101: target slot 4, Rett = High
-            "P 7 21 A 06 07 01 FF FF", // dreieskive: CW 6, CCW 7, kind 1
-            "P 8 20 A 07 FF 02 FF FF", // green request: kind 2
+            "P 30 21 A 06 07 01 FF FF", // dreieskive: fixed slot 30, CW 6, CCW 7, kind 1
+            "P 31 20 A 07 FF 02 FF FF", // green request: fixed slot 31, kind 2
         }));
     }
 

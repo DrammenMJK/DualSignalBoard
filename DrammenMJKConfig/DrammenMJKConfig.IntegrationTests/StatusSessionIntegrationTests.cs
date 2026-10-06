@@ -42,22 +42,14 @@ public class StatusSessionIntegrationTests
         var (conn, device) = ArduinoTestHelper.Connect();
         using (conn)
         {
-            device.SystemConfigDownloadStart();
-            try
-            {
-                while (true)
-                {
-                    string? line = device.GetNextSystemConfigLine(2000);
-                    Assert.That(line, Is.Not.Null, "Device timed out mid-download (SCD never sent END).");
-                    if (line == "END") break;
+            var lines = device.SystemConfigDownload();
+            Assert.That(lines, Is.Not.Null, "Device timed out mid-download (SCD never sent END).");
 
-                    // SCD line tags emitted by Firmware.ino cmdSCD(): S=switch slot,
-                    // P=SVB switch, D=dreieskive, L=status LED, G=signal lamp group,
-                    // V=inverter-enable pin, T=track detection.
-                    Assert.That(line, Does.Match("^[SPDLGVT] "), $"Unrecognized SCD line tag: '{line}'");
-                }
-            }
-            finally { device.SystemConfigDownloadFinish(); }
+            // SCD line tags emitted by Firmware.ino cmdSCD(): S=switch slot,
+            // P=SVB panel input, Q=panel LED, D=dreieskive, L=status LED,
+            // G=signal lamp group, V=inverter-enable pin, T=track detection.
+            foreach (string line in lines!)
+                Assert.That(line, Does.Match("^[SPQDLGVT] "), $"Unrecognized SCD line tag: '{line}'");
         }
     }
 }
