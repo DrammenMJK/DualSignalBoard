@@ -15,6 +15,8 @@ static class ConfigSession
                 ('1', "Motor scan — find switch motors + feedback",         () => MotorScan(arduino)),
                 ('2', "Signal scan — find signal lamp bits (Red/Green1/Green2)", () => SignalScan(arduino)),
                 ('3', "Track detection — set which bit + level means train present", () => TrackDetectionScan(arduino)),
+                ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", () => PanelScanSession.LedScan(arduino)),
+                ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", () => PanelScanSession.SwitchScan(arduino)),
                 ('J', "System Config Backup (backup/restore)",              () => SystemConfigSession.Run(arduino)),
                 ('E', "Edit switch config — fix labeling/polarity mistakes", () => SwitchEditSession.Run(arduino)),
                 ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),

@@ -90,7 +90,7 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 #define REGION_SVBSW_VADDR   0x120 // SvbSwVAddr[32]
 #define REGION_SVBSW_BITPRI  0x140 // SvbSwBitPrimary[32]
 #define REGION_SVBSW_BITSEC  0x160 // SvbSwBitSecondary[32]
-#define REGION_SVBSW_TGTDREI 0x180 // SvbSwTargetIsDreieskive[32]
+#define REGION_SVBSW_KIND    0x180 // SvbSwKind[32]: 0 = pens, 1 = dreieskive (bitPri CW, bitSec CCW), 2 = green request button
 #define REGION_SVBSW_TGTSLOT 0x1A0 // SvbSwTargetSlot[32]
 
 // Status LED — one per board, indexed by the SAME slot the board hardware
@@ -123,7 +123,23 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 #define REGION_TRACK_BIT       0x220 // TrackDetectBit[BOARD_CAP]
 #define REGION_TRACK_ACTIVEHI  0x230 // TrackDetectActiveHigh[BOARD_CAP]
 
-#define EEPROM_ERASE_END     0x23F // EC clears 0x02..0x23F plus the magic byte
+// SVB panel switch extras (appended after the original layout, so nothing
+// above moved): which port the input bit(s) are on, and which input level
+// means the panel switch is at Rett (pens only).
+#define REGION_SVBSW_PORT    0x240 // SvbSwPort[32]: 0 = A, 1 = B
+#define REGION_SVBSW_POL     0x260 // SvbSwPolarity[32]: input level for Rett
+
+// SVB panel LEDs -- one entry per LED. Target is a switch-table slot (pens)
+// or 0xFF for the panel's signal lamp. Role: 0 = Rett, 1 = Avvik (pens),
+// 2 = Red, 3 = Green1, 4 = Green2 (signal). 0xFF in VAddr = unused entry.
+// Stored only; the runtime that lights them from feedback comes later.
+#define PLED_CAP             48
+#define REGION_PLED_VADDR    0x280 // PanelLedVAddr[48]
+#define REGION_PLED_PORTBIT  0x2B0 // PanelLedPortBit[48]: bit | (isB << 3)
+#define REGION_PLED_TARGET   0x2E0 // PanelLedTarget[48]
+#define REGION_PLED_ROLE     0x310 // PanelLedRole[48]
+
+#define EEPROM_ERASE_END     0x33F // EC clears 0x02..0x33F plus the magic byte
 
 // ---------------------------------------------------------------------------
 // MCP23017 register addresses
@@ -782,20 +798,48 @@ static void cmdSCU() {
             Serial.println(F("OK"));
         }
         else if (strcmp_P(tag, PSTR("P")) == 0) {
-            uint16_t slot, va, bp, bs, tid, ts;
+            // P <slot> <vaddr> <port> <bitPri> <bitSec> <kind> <targetSlot> <pol>
+            uint16_t slot, va, bp, bs, kind, ts, pol; uint8_t isB;
             if (!parseUint(strtok(nullptr, " "), &slot) || slot >= SVBSW_CAP ||
                 !parseHex(strtok(nullptr, " "), &va) ||
+                !parsePort(strtok(nullptr, " "), &isB) ||
                 !parseHex(strtok(nullptr, " "), &bp) ||
                 !parseHex(strtok(nullptr, " "), &bs) ||
-                !parseHex(strtok(nullptr, " "), &tid) ||
-                !parseHex(strtok(nullptr, " "), &ts)) {
+                !parseHex(strtok(nullptr, " "), &kind) ||
+                !parseHex(strtok(nullptr, " "), &ts) ||
+                !parseHex(strtok(nullptr, " "), &pol)) {
                 Serial.println(F("ERR parse")); okAll = false; break;
             }
             EEPROM.update(REGION_SVBSW_VADDR   + slot, (uint8_t)va);
+            EEPROM.update(REGION_SVBSW_PORT    + slot, isB);
             EEPROM.update(REGION_SVBSW_BITPRI  + slot, (uint8_t)bp);
             EEPROM.update(REGION_SVBSW_BITSEC  + slot, (uint8_t)bs);
-            EEPROM.update(REGION_SVBSW_TGTDREI + slot, (uint8_t)tid);
+            EEPROM.update(REGION_SVBSW_KIND    + slot, (uint8_t)kind);
             EEPROM.update(REGION_SVBSW_TGTSLOT + slot, (uint8_t)ts);
+            EEPROM.update(REGION_SVBSW_POL     + slot, (uint8_t)pol);
+            Serial.println(F("OK"));
+        }
+        else if (strcmp_P(tag, PSTR("Z")) == 0) {
+            // Clear the whole panel LED table -- sent before a full set of Q
+            // lines, so LEDs dropped from SystemConfig.json don't linger.
+            for (uint8_t i = 0; i < PLED_CAP; i++) EEPROM.update(REGION_PLED_VADDR + i, 0xFF);
+            Serial.println(F("OK"));
+        }
+        else if (strcmp_P(tag, PSTR("Q")) == 0) {
+            // Q <idx> <vaddr> <port> <bit> <targetSlot> <role>
+            uint16_t idx, va, bit, ts, role; uint8_t isB;
+            if (!parseUint(strtok(nullptr, " "), &idx) || idx >= PLED_CAP ||
+                !parseHex(strtok(nullptr, " "), &va) ||
+                !parsePort(strtok(nullptr, " "), &isB) ||
+                !parseHex(strtok(nullptr, " "), &bit) || bit > 7 ||
+                !parseHex(strtok(nullptr, " "), &ts) ||
+                !parseHex(strtok(nullptr, " "), &role)) {
+                Serial.println(F("ERR parse")); okAll = false; break;
+            }
+            EEPROM.update(REGION_PLED_VADDR   + idx, (uint8_t)va);
+            EEPROM.update(REGION_PLED_PORTBIT + idx, (uint8_t)(bit | (isB << 3)));
+            EEPROM.update(REGION_PLED_TARGET  + idx, (uint8_t)ts);
+            EEPROM.update(REGION_PLED_ROLE    + idx, (uint8_t)role);
             Serial.println(F("OK"));
         }
         else if (strcmp_P(tag, PSTR("D")) == 0) {
@@ -900,12 +944,25 @@ static void cmdSCD() {
         uint8_t va = EEPROM.read(REGION_SVBSW_VADDR + slot);
         if (va == 0xFF) continue;
         char buf[40];
-        snprintf(buf, sizeof(buf), "P %d %02X %02X %02X %02X %02X",
+        snprintf(buf, sizeof(buf), "P %d %02X %c %02X %02X %02X %02X %02X",
             slot, va,
+            EEPROM.read(REGION_SVBSW_PORT + slot) ? 'B' : 'A',
             EEPROM.read(REGION_SVBSW_BITPRI  + slot),
             EEPROM.read(REGION_SVBSW_BITSEC  + slot),
-            EEPROM.read(REGION_SVBSW_TGTDREI + slot),
-            EEPROM.read(REGION_SVBSW_TGTSLOT + slot));
+            EEPROM.read(REGION_SVBSW_KIND    + slot),
+            EEPROM.read(REGION_SVBSW_TGTSLOT + slot),
+            EEPROM.read(REGION_SVBSW_POL     + slot));
+        Serial.println(buf);
+    }
+    for (uint8_t i = 0; i < PLED_CAP; i++) {
+        uint8_t va = EEPROM.read(REGION_PLED_VADDR + i);
+        if (va == 0xFF) continue;
+        uint8_t pb = EEPROM.read(REGION_PLED_PORTBIT + i);
+        char buf[32];
+        snprintf(buf, sizeof(buf), "Q %d %02X %c %02X %02X %02X",
+            i, va, (pb & 0x08) ? 'B' : 'A', pb & 0x07,
+            EEPROM.read(REGION_PLED_TARGET + i),
+            EEPROM.read(REGION_PLED_ROLE   + i));
         Serial.println(buf);
     }
     uint8_t dv = EEPROM.read(ADDR_DREI_VADDR);

@@ -293,6 +293,20 @@ sealed class ArduinoDevice
 
     public void SystemConfigUploadAbort() => _conn.StopCapture();
 
+    // Sends a batch of SCU lines in one session. False (session aborted) on
+    // the first line the firmware doesn't OK.
+    public bool SystemConfigSend(IEnumerable<string> lines)
+    {
+        if (!SystemConfigUploadStart()) return false;
+        foreach (string line in lines)
+        {
+            if (SystemConfigSendLine(line)) continue;
+            SystemConfigUploadAbort();
+            return false;
+        }
+        return SystemConfigUploadFinish();
+    }
+
     // Declares one board's status LED (vaddr + bit) via a single-line SCU
     // session. Firmware resolves which EEPROM slot that is itself via
     // board_find_slot(vaddr) -- the board must already be in the hardware

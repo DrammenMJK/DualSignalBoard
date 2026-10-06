@@ -23,11 +23,18 @@ static class SystemConfigJson
     public static void Save(SystemConfigFile file, string path) =>
         File.WriteAllText(path, JsonSerializer.Serialize(file, WriteOptions));
 
+    public const string Dreieskive = "dreieskive";
+    public const string AskGreen = "askGreen";
+    public const string SignalTarget = "signal";
+
     // Ordered labels for svbSwitches, matching the slot order used on the wire:
     // every switch label (same order as BoardConfig.AllSwitchSlots()), then
-    // "dreieskive" last.
-    static IReadOnlyList<string> SvbSwitchLabelOrder() =>
-        BoardConfig.AllSwitchSlots().Select(s => s.Label).Append("dreieskive").ToList();
+    // "dreieskive", then "askGreen".
+    public static IReadOnlyList<string> SvbSwitchLabelOrder() =>
+        BoardConfig.AllSwitchSlots().Select(s => s.Label).Append(Dreieskive).Append(AskGreen).ToList();
+
+    // Panel LED role byte on the wire/in EEPROM <-> name in SystemConfig.json.
+    public static readonly string[] LedRoles = ["rett", "avvik", "red", "green1", "green2"];
 
     static string Hex(string? vaddrHexString)
     {
@@ -57,21 +64,10 @@ static class SystemConfigJson
             switchCount++;
         }
 
-        var svbLabels = SvbSwitchLabelOrder();
-        for (int i = 0; i < svbLabels.Count; i++)
-        {
-            string label = svbLabels[i];
-            if (!file.SvbSwitches.TryGetValue(label, out var sv) || sv.VAddr == null) continue;
-
-            bool isDreieskive = label == "dreieskive";
-            byte bitPrimary = (byte)(isDreieskive ? sv.BitCw ?? 0 : sv.Bit ?? 0);
-            byte bitSecondary = (byte)(isDreieskive ? sv.BitCcw ?? 0xFF : 0xFF);
-            byte targetIsDrei = (byte)(isDreieskive ? 1 : 0);
-            byte targetSlot = (byte)(!isDreieskive && BoardConfig.TryFindSlotByLabel(label, out int s) ? s : 0xFF);
-
-            lines.Add($"P {i} {Hex(sv.VAddr)} {bitPrimary:X2} {bitSecondary:X2} {targetIsDrei:X2} {targetSlot:X2}");
-            svbSwitchCount++;
-        }
+        var svbLines = SvbSwitchLines(file.SvbSwitches);
+        svbSwitchCount = svbLines.Count;
+        lines.AddRange(svbLines);
+        lines.AddRange(PanelLedLines(file.PanelLeds));
 
         if (file.Dreieskive.MotorVAddr != null)
         {
@@ -106,10 +102,54 @@ static class SystemConfigJson
         return lines;
     }
 
+    // One "P" line per configured panel input:
+    // P <slot> <vaddr> <port> <bitPri> <bitSec> <kind> <targetSlot> <pol>
+    // kind 0 = pens, 1 = dreieskive (bitPri CW, bitSec CCW), 2 = green request.
+    public static List<string> SvbSwitchLines(IReadOnlyDictionary<string, SvbSwitchEntry> svbSwitches)
+    {
+        var lines = new List<string>();
+        var svbLabels = SvbSwitchLabelOrder();
+        for (int i = 0; i < svbLabels.Count; i++)
+        {
+            string label = svbLabels[i];
+            if (!svbSwitches.TryGetValue(label, out var sv) || sv.VAddr == null) continue;
+
+            bool isDreieskive = label == Dreieskive;
+            byte bitPrimary = (byte)(isDreieskive ? sv.BitCw ?? 0xFF : sv.Bit ?? 0);
+            byte bitSecondary = (byte)(isDreieskive ? sv.BitCcw ?? 0xFF : 0xFF);
+            byte kind = (byte)(isDreieskive ? 1 : label == AskGreen ? 2 : 0);
+            byte targetSlot = (byte)(kind == 0 && BoardConfig.TryFindSlotByLabel(label, out int s) ? s : 0xFF);
+            byte polarity = (byte)(kind == 0 ? sv.Polarity ?? 0xFF : 0xFF);
+
+            lines.Add($"P {i} {Hex(sv.VAddr)} {sv.Port ?? "A"} {bitPrimary:X2} {bitSecondary:X2} {kind:X2} {targetSlot:X2} {polarity:X2}");
+        }
+        return lines;
+    }
+
+    // "Z" (clear the board's LED table) then one "Q" per LED, so a restore
+    // leaves exactly the file's LEDs -- none left over from an earlier scan.
+    // Nothing at all when the file has no LEDs, so an older SystemConfig.json
+    // without panelLeds doesn't wipe the board's table.
+    public static List<string> PanelLedLines(IReadOnlyList<PanelLedEntry> leds)
+    {
+        var lines = new List<string>();
+        if (leds.Count == 0) return lines;
+        lines.Add("Z");
+        for (int i = 0; i < leds.Count; i++)
+        {
+            var led = leds[i];
+            byte target = (byte)(led.Target != SignalTarget && BoardConfig.TryFindSlotByLabel(led.Target ?? "", out int s) ? s : 0xFF);
+            int role = Array.IndexOf(LedRoles, led.Role);
+            lines.Add($"Q {i} {Hex(led.VAddr)} {led.Port ?? "A"} {led.Bit ?? 0:X2} {target:X2} {role:X2}");
+        }
+        return lines;
+    }
+
     public static void ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
     {
         var slotToLabel = BoardConfig.AllSwitchSlots().ToDictionary(s => s.Slot, s => s.Label);
         var svbLabels = SvbSwitchLabelOrder();
+        bool clearedLeds = false; // the board's LED table replaces the file's, not appends to it
 
         foreach (string line in lines)
         {
@@ -135,23 +175,43 @@ static class SystemConfigJson
                         };
                         break;
                     }
-                    case "P" when parts.Length == 7:
+                    case "P" when parts.Length == 9:
                     {
+                        // P <slot> <vaddr> <port> <bitPri> <bitSec> <kind> <targetSlot> <pol>
                         int slot = int.Parse(parts[1]);
                         if (slot < 0 || slot >= svbLabels.Count) break;
                         string label = svbLabels[slot];
-                        bool isDrei = label == "dreieskive";
-                        var entry = new SvbSwitchEntry { VAddr = HexStr(parts[2]) };
-                        if (isDrei)
+                        var entry = new SvbSwitchEntry { VAddr = HexStr(parts[2]), Port = parts[3] };
+                        if (label == Dreieskive)
                         {
-                            entry.BitCw = Convert.ToInt32(parts[3], 16);
-                            entry.BitCcw = Convert.ToInt32(parts[4], 16);
+                            if (parts[4] != "FF") entry.BitCw = Convert.ToInt32(parts[4], 16);
+                            if (parts[5] != "FF") entry.BitCcw = Convert.ToInt32(parts[5], 16);
                         }
                         else
                         {
-                            entry.Bit = Convert.ToInt32(parts[3], 16);
+                            entry.Bit = Convert.ToInt32(parts[4], 16);
+                            if (parts[8] != "FF") entry.Polarity = Convert.ToInt32(parts[8], 16);
                         }
                         file.SvbSwitches[label] = entry;
+                        break;
+                    }
+                    case "Q" when parts.Length == 7:
+                    {
+                        // Q <idx> <vaddr> <port> <bit> <targetSlot> <role>
+                        int role = Convert.ToInt32(parts[6], 16);
+                        if (role >= LedRoles.Length) break;
+                        string? target = parts[5] == "FF" ? SignalTarget
+                            : slotToLabel.GetValueOrDefault(Convert.ToInt32(parts[5], 16));
+                        if (target == null) break;
+                        if (!clearedLeds) { file.PanelLeds.Clear(); clearedLeds = true; }
+                        file.PanelLeds.Add(new PanelLedEntry
+                        {
+                            VAddr = HexStr(parts[2]),
+                            Port = parts[3],
+                            Bit = Convert.ToInt32(parts[4], 16),
+                            Target = target,
+                            Role = LedRoles[role],
+                        });
                         break;
                     }
                     case "D" when parts.Length == 4:

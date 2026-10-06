@@ -508,17 +508,27 @@ the switch table).
 | `0x120`–`0x13F` | `SvbSwVAddr[32]` — SVB chip this operator switch lives on; `0xFF` = unconfigured | 32 |
 | `0x140`–`0x15F` | `SvbSwBitPrimary[32]` — bit 0–7 | 32 |
 | `0x160`–`0x17F` | `SvbSwBitSecondary[32]` — bit 0–7, or `0xFF` = single-bit switch (the common case — a plain on/off panel switch has only one bit) | 32 |
-| `0x180`–`0x19F` | `SvbSwTargetIsDreieskive[32]` — `1` = this entry is the dreieskive's 3-position toggle (`BitPrimary`=CW, `BitSecondary`=CCW), ignore `TargetSlot`; `0` = a normal switch | 32 |
-| `0x1A0`–`0x1BF` | `SvbSwTargetSlot[32]` — which switch-table `slot` this panel switch drives, when `TargetIsDreieskive = 0` | 32 |
+| `0x180`–`0x19F` | `SvbSwKind[32]` — `0` = pens switch (drives `TargetSlot`); `1` = the dreieskive's on-off-on toggle (`BitPrimary`=CW, `BitSecondary`=CCW); `2` = the green-request push button. Was `SvbSwTargetIsDreieskive` (0/1) | 32 |
+| `0x1A0`–`0x1BF` | `SvbSwTargetSlot[32]` — which switch-table `slot` this panel switch drives, when `Kind = 0` | 32 |
+| `0x240`–`0x25F` | `SvbSwPort[32]` — `0` = port A, `1` = port B | 32 |
+| `0x260`–`0x27F` | `SvbSwPolarity[32]` — input level that means the panel switch is at Rett (pens only, `0xFF` otherwise) | 32 |
 
-An entry is "configured" iff `SvbSwVAddr[slot] != 0xFF`. Every field here
-stays unconfigured through all of Phase 1 — populating it needs an actual
-SVB board and a discovery flow (Phase 2's equivalent of the old system's
-"Command 2 — Manual switch → Pens mapping" / "Command D — Dreieskive switch",
-per `PlanExtended.md`'s `DrammenMJKConfig` menu list), neither of which
-exists yet. The table is built now purely so wiring up the SVB later is a
-data change, not a schema change — see
-[Explicitly deferred](#explicitly-deferred-not-phase-1).
+An entry is "configured" iff `SvbSwVAddr[slot] != 0xFF`. Populated by
+Config → `5` (Panel switch scan). Wire: `P <slot> <vaddr> <port> <bitPri>
+<bitSec> <kind> <targetSlot> <pol>`.
+
+**SVB panel LEDs** (48 capacity, populated by Config → `4`, Panel LED scan):
+
+| Address | Content | Size |
+|---|---|---|
+| `0x280`–`0x2AF` | `PanelLedVAddr[48]` — `0xFF` = unused entry | 48 |
+| `0x2B0`–`0x2DF` | `PanelLedPortBit[48]` — `bit | (isPortB << 3)` | 48 |
+| `0x2E0`–`0x30F` | `PanelLedTarget[48]` — switch-table `slot` (pens), or `0xFF` = the panel's signal lamp | 48 |
+| `0x310`–`0x33F` | `PanelLedRole[48]` — `0` Rett, `1` Avvik (pens); `2` Red, `3` Green1, `4` Green2 (signal) | 48 |
+
+Wire: `Z` clears the table, then `Q <idx> <vaddr> <port> <bit> <targetSlot>
+<role>` per LED. Stored only — the runtime that lights panel LEDs from switch
+feedback, and the green-request algorithm, are not built yet.
 
 ### Board hardware table
 

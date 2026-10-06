@@ -120,6 +120,8 @@ static class StatusSession
             foreach (var (boardName, led) in file.StatusLeds)
                 Console.WriteLine($"  Status LED ({boardName}): vaddr={led.VAddr} bit={led.Bit}");
 
+        Console.WriteLine($"  Panel (SVB): {file.SvbSwitches.Count} input(s) [{string.Join(", ", file.SvbSwitches.Keys)}], {file.PanelLeds.Count} LED(s)");
+
         return (file.Switches.Count, allLabels.Count);
     }
 }

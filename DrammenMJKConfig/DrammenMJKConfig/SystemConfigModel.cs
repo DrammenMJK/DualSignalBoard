@@ -33,14 +33,30 @@ sealed class StatusLedEntry
     [JsonPropertyName("bit")] public int? Bit { get; set; }
 }
 
-// One SVB panel switch. `Bit` for a plain on/off switch; `BitCw`/`BitCcw` for
-// the dreieskive's 3-position toggle (the "dreieskive" key only).
+// One SVB panel input, keyed by what it controls: a pens label, "dreieskive"
+// or "askGreen" (the green-request button). `Bit` for a pens switch or the
+// button; `BitCw`/`BitCcw` for the dreieskive's on-off-on toggle. `Polarity`
+// (pens only) = the input level that means the panel switch is at Rett.
 sealed class SvbSwitchEntry
 {
     [JsonPropertyName("vaddr")] public string? VAddr { get; set; }
+    [JsonPropertyName("port")] public string? Port { get; set; } // "A" or "B"
     [JsonPropertyName("bit")] public int? Bit { get; set; }
     [JsonPropertyName("bitCw")] public int? BitCw { get; set; }
     [JsonPropertyName("bitCcw")] public int? BitCcw { get; set; }
+    [JsonPropertyName("polarity")] public int? Polarity { get; set; }
+}
+
+// One SVB panel LED. Target is a pens label (role "rett"/"avvik") or
+// "signal" (role "red"/"green1"/"green2"). A pens has 2 LEDs, 5/6 has 3
+// (2 Rett + 1 Avvik) -- just more entries with the same target.
+sealed class PanelLedEntry
+{
+    [JsonPropertyName("vaddr")] public string? VAddr { get; set; }
+    [JsonPropertyName("port")] public string? Port { get; set; } // "A" or "B"
+    [JsonPropertyName("bit")] public int? Bit { get; set; }
+    [JsonPropertyName("target")] public string? Target { get; set; }
+    [JsonPropertyName("role")] public string? Role { get; set; }
 }
 
 sealed class SignalEntry
@@ -80,6 +96,7 @@ sealed class SystemConfigFile
     [JsonPropertyName("dreieskive")] public DreieskiveEntry Dreieskive { get; set; } = new();
     [JsonPropertyName("statusLeds")] public Dictionary<string, StatusLedEntry> StatusLeds { get; set; } = new();
     [JsonPropertyName("svbSwitches")] public Dictionary<string, SvbSwitchEntry> SvbSwitches { get; set; } = new();
+    [JsonPropertyName("panelLeds")] public List<PanelLedEntry> PanelLeds { get; set; } = new();
     [JsonPropertyName("signals")] public Dictionary<string, SignalEntry> Signals { get; set; } = new();
     [JsonPropertyName("trackDetection")] public Dictionary<string, TrackDetectionEntry> TrackDetections { get; set; } = new();
     [JsonPropertyName("inverterEnables")] public Dictionary<string, InverterEnableEntry> InverterEnables { get; set; } = new();

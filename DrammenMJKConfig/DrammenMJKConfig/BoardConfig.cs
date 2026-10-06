@@ -164,16 +164,24 @@ static class BoardConfig
 
         Svb = new BoardSvb(file.Svb.Name, file.Svb.Number, scbs);
         AllBoards = file.Boards;
+        PanelBoards = file.Boards
+            .Where(b => b.Category is "SVB" or "Combined")
+            .Select(b => (b.Name, VAddrs(b, testMode)))
+            .ToList();
     }
+
+    // Boards with a panel (switches + LEDs): SVBs and Combined boards, with
+    // their resolved virtual addresses -- what the panel LED/switch scans
+    // work on.
+    public static IReadOnlyList<(string Name, IReadOnlyList<byte> VAddrs)> PanelBoards { get; private set; } =
+        Array.Empty<(string, IReadOnlyList<byte>)>();
+
+    static IReadOnlyList<byte> VAddrs(BoardDeclaration b, bool testMode) =>
+        b.Chips.Select(hex => ArduinoDevice.VirtualAddress(testMode ? 0 : b.Bus, Convert.ToByte(hex, 16))).ToList();
 
     static BoardScb ToBoardScb(BoardDeclaration b, bool testMode)
     {
-        var vaddrs = b.Chips.Select(hex =>
-        {
-            byte realAddr = Convert.ToByte(hex, 16);
-            int bus = testMode ? 0 : b.Bus;
-            return ArduinoDevice.VirtualAddress(bus, realAddr);
-        }).ToList();
+        var vaddrs = VAddrs(b, testMode);
 
         return new BoardScb(
             b.Name,
