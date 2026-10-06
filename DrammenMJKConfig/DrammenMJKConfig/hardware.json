@@ -10,7 +10,7 @@
       "category": "SCB",
       "chips": [
         {
-          "vaddr": "0x24",
+          "vaddr": "0x44",
           "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu"],
           "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
         }
@@ -21,8 +21,24 @@
       "category": "SCB",
       "chips": [
         {
-          "vaddr": "0x20",
+          "vaddr": "0x40",
           "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "out"],
+          "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
+        }
+      ]
+    },
+    {
+      "name": "Fossli Stillverk",
+      "category": "SVB",
+      "chips": [
+        {
+          "vaddr": "0x20",
+          "portA": ["in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu", "in-pu"],
+          "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
+        },
+        {
+          "vaddr": "0x21",
+          "portA": ["out",   "out",   "out",   "out",   "out",   "out",   "in-pu", "in-pu"],
           "portB": ["out",   "out",   "out",   "out",   "out",   "out",   "out",   "out"]
         }
       ]

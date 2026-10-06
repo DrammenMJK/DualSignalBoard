@@ -205,17 +205,30 @@ static bool parsePort(const char* s, uint8_t* isPortB) {
 // Virtual-address resolver — bus lives here, and only here.
 // vaddr = bus*0x10 + real_i2c_address (real address always 0x20-0x27)
 // ---------------------------------------------------------------------------
+// Valid range: buses 0-3 (vaddr 0x20-0x57), real address 0x20-0x27 only.
 static VAddrResolved resolve_vaddr(uint8_t vaddr) {
     VAddrResolved r;
     r.bus      = (uint8_t)((vaddr >> 4) - 2);
     r.realAddr = 0x20 | (vaddr & 0x0F);
-    r.ok       = (r.bus == 0); // Phase 1: no mux fitted, only bus 0 is wired
+    r.ok       = vaddr >= 0x20 && vaddr <= 0x57 && (vaddr & 0x0F) <= 7;
     return r;
 }
 
-// Phase 1: no mux fitted; validating no-op. Phase 2+: drives the mux channel select.
+// I2C mux (TCA9548A/PCA9548A/PCA9546A family -- all take one control byte,
+// bit n = channel n enabled). Address 0x70 = all address pins low.
+// ponytail: chip/address assumed, not yet stated in the plans -- change here.
+#define MUX_ADDR 0x70
+
+// Selects the bus via the mux, then the caller addresses the real chip.
+// The mux's ACK is deliberately ignored: on the bench there is no mux, the
+// select write just goes unanswered, and every chip sits directly on the
+// one physical bus -- so the same virtual addresses work with or without
+// the mux fitted, and only the real address matters on the bench.
 static bool i2c_select_bus(uint8_t bus) {
-    return bus == 0;
+    Wire.beginTransmission(MUX_ADDR);
+    Wire.write((uint8_t)(1 << bus));
+    Wire.endTransmission();
+    return true;
 }
 
 // Set once in setup() from EEPROM (ADDR_MODE) and never touched again this
