@@ -2,37 +2,12 @@ using static DrammenMJKConfig.ConfigInputHelpers;
 
 namespace DrammenMJKConfig;
 
-static class ConfigSession
+// The Config-mode commands that talk to the board directly: motor, signal
+// and track detection scans, Test/Prod mode, EEPROM reset and restart. The
+// Config menu itself (which also offers the other sessions) is built in
+// Program.cs.
+sealed class ConfigSession(IArduinoDevice arduino)
 {
-    public static void Run(ArduinoDevice arduino)
-    {
-        Console.WriteLine();
-        Console.WriteLine("=== Config Mode ===");
-
-        var menu = new Menu(
-            [
-                ('H', "Hardware config (upload/download hardware.json)",   () => HardwareConfigSession.Run(arduino)),
-                ('1', "Motor scan — find switch motors + feedback",         () => MotorScan(arduino)),
-                ('2', "Signal scan — find signal lamp bits (Red/Green1/Green2)", () => SignalScan(arduino)),
-                ('3', "Track detection — set which bit + level means train present", () => TrackDetectionScan(arduino)),
-                ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", () => PanelScanSession.LedScan(arduino)),
-                ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", () => PanelScanSession.SwitchScan(arduino)),
-                ('6', "Edit panel config (SVB) — fix labeling/polarity mistakes",  () => PanelEditSession.Run(arduino)),
-                ('J', "System Config Backup (backup/restore)",              () => SystemConfigSession.Run(arduino)),
-                ('E', "Edit switch config — fix labeling/polarity mistakes", () => SwitchEditSession.Run(arduino)),
-                ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),
-                ('M', "Test/Prod mode — enable/disable I2C at boot",       () => ModeConfig(arduino)),
-                ('R', "Reset: erase all config from EEPROM",               () => ResetConfig(arduino)),
-                ('A', "Restart Arduino (watchdog reset, re-runs setup())", () => Restart(arduino)),
-            ],
-            quitOption: ('Q', "Exit config mode")
-        );
-        menu.Run();
-
-        Console.WriteLine("Exiting config mode.");
-        Console.WriteLine();
-    }
-
     // -------------------------------------------------------------------------
     // Command 1: Motor scan (Phase 1 scope — see PLAN_Phase1.md)
     //
@@ -40,40 +15,59 @@ static class ConfigSession
     // input+pullup on the board being scanned) — Motor Scan doesn't touch
     // MDIR/MPU itself. Dreieskive is declared (fixed pins), never scanned.
     // -------------------------------------------------------------------------
-    static void MotorScan(ArduinoDevice arduino)
-    {
-        // Real switch motors take several seconds to travel end-to-end (~5s
-        // observed) -- needs real margin above that, not just above the I2C
-        // round-trip time.
-        const int FeedbackTimeoutMs = 10000;
+    // Real switch motors take several seconds to travel end-to-end (~5s
+    // observed) -- needs real margin above that, not just above the I2C
+    // round-trip time.
+    const int FeedbackTimeoutMs = 10000;
 
+    public void MotorScan()
+    {
         Console.WriteLine();
         Console.WriteLine("--- Command 1: Motor Scan ---");
         Console.WriteLine("Fires each motor pin in turn. Watch the layout to see what moves.");
         Console.WriteLine("Esc = abort at any point.");
         Console.WriteLine();
 
-        var svb = BoardConfig.Svb;
-        var scbs = svb.Scbs;
-        Console.WriteLine("Boards: " + string.Join("  ", scbs.Select((b, i) => $"{i + 1}={b.Name}")));
-        Console.Write("Select board (or Esc): ");
-        char boardChoice = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '9' && (ch - '1') < scbs.Count));
-        Console.WriteLine(boardChoice == EscKey ? "[Esc]" : boardChoice.ToString());
-        if (boardChoice == EscKey) { Console.WriteLine(); return; }
-        var scb = scbs[boardChoice - '1'];
-        byte vaddr = scb.VirtualAddress;
+        if (PickScb() is not { } scb) return;
         var file = SystemConfigSession.LoadOrNew();
+        if (!DeclareBoardFacts(scb, file)) return;
 
-        // Declare dreieskive (only for the one board that owns it) + status
-        // LED facts up front — not scanned, but known now, so
-        // SystemConfig.json/EEPROM fully describe the board from the first
-        // scan onward, not just its discovered switches.
+        var assignedLabels = new HashSet<string>();
+        var keptBits = new HashSet<int>();
+        if (!ChooseScope(scb, file, assignedLabels, keptBits)) { Console.WriteLine("Motor scan aborted."); Console.WriteLine(); return; }
+
+        bool userAborted = false;
+        for (int i = 0; i < scb.Switches.Count && !userAborted; i++)
+        {
+            int motorBit = scb.MotorBitFor(i);
+            if (!keptBits.Contains(motorBit))
+                userAborted = !ScanBit(scb, motorBit, assignedLabels, file);
+        }
+
+        Console.WriteLine(userAborted ? "Motor scan aborted." : "Motor scan complete.");
+        Console.WriteLine();
+    }
+
+    // Declare dreieskive (only for the one board that owns it) + status
+    // LED + inverter enable facts up front — not scanned, but known now, so
+    // SystemConfig.json/EEPROM fully describe the board from the first
+    // scan onward, not just its discovered switches. False = stop the scan.
+    bool DeclareBoardFacts(BoardScb scb, SystemConfigFile file)
+    {
+        byte vaddr = scb.VirtualAddress;
+        string vaddrHex = $"0x{vaddr:X2}";
+
         if (scb.DreieskivePins is { } drei)
         {
-            arduino.EepromWrite(ArduinoDevice.AddrDreieskiveVAddr, vaddr);
-            arduino.EepromWrite(ArduinoDevice.AddrDreieskiveMotorPinBase, (byte)drei.Base);
-            SystemConfigSession.SaveDreieskive(file,
-                new DreieskiveEntry { MotorVAddr = $"0x{vaddr:X2}", MotorPinBase = drei.Base, CwPolarity = null });
+            if (!arduino.EepromWrite(ArduinoDevice.AddrDreieskiveVAddr, vaddr) ||
+                !arduino.EepromWrite(ArduinoDevice.AddrDreieskiveMotorPinBase, (byte)drei.Base))
+            {
+                Console.WriteLine("Failed to declare dreieskive — no response from Arduino.");
+                Console.WriteLine();
+                return false;
+            }
+            file.Dreieskive = new DreieskiveEntry { MotorVAddr = vaddrHex, MotorPinBase = drei.Base, CwPolarity = null };
+            SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
             Console.WriteLine($"Declared dreieskive (pins {drei.Base}/{drei.Upper}).");
         }
 
@@ -81,12 +75,12 @@ static class ConfigSession
         {
             if (!arduino.SetStatusLed(vaddr, led.Bit))
             {
-                Console.WriteLine($"Failed to declare status LED — is 0x{vaddr:X2} in the board hardware table yet? Upload hardware.json first.");
+                Console.WriteLine($"Failed to declare status LED — is {vaddrHex} in the board hardware table yet? Upload hardware.json first.");
                 Console.WriteLine();
-                return;
+                return false;
             }
-            SystemConfigSession.SaveStatusLed(file, scb.Name,
-                new StatusLedEntry { VAddr = $"0x{vaddr:X2}", Bit = led.Bit });
+            file.StatusLeds[scb.Name] = new StatusLedEntry { VAddr = vaddrHex, Bit = led.Bit };
+            SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
             Console.WriteLine($"Declared status LED (bit {led.Bit}).");
         }
 
@@ -94,239 +88,193 @@ static class ConfigSession
         {
             if (!arduino.SetInverterEnable(vaddr, inv.Port, inv.Bit))
             {
-                Console.WriteLine($"Failed to declare inverter enable — is 0x{vaddr:X2} in the board hardware table yet? Upload hardware.json first.");
+                Console.WriteLine($"Failed to declare inverter enable — is {vaddrHex} in the board hardware table yet? Upload hardware.json first.");
                 Console.WriteLine();
-                return;
+                return false;
             }
-            SystemConfigSession.SaveInverterEnable(file, scb.Name,
-                new InverterEnableEntry { VAddr = $"0x{vaddr:X2}", Port = inv.Port.ToString(), Bit = inv.Bit });
+            file.InverterEnables[scb.Name] = new InverterEnableEntry { VAddr = vaddrHex, Port = inv.Port.ToString(), Bit = inv.Bit };
+            SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
             Console.WriteLine($"Declared inverter enable (port {inv.Port} bit {inv.Bit}).");
         }
         Console.WriteLine();
+        return true;
+    }
 
-        // Check what's already in EEPROM for THIS board's switches before
-        // deciding scope -- scoped to scb.Switches, not every SCB system-wide.
-        // Silently skipping already-configured switches with no explanation
-        // looked exactly like the scan doing nothing; ask instead.
+    // Check what's already in EEPROM for THIS board's switches before
+    // deciding scope -- scoped to scb.Switches, not every SCB system-wide.
+    // Silently skipping already-configured switches with no explanation
+    // looked exactly like the scan doing nothing; ask instead. K fills
+    // `keptLabels`/`keptBits`; O clears the board's slots. False = abort.
+    bool ChooseScope(BoardScb scb, SystemConfigFile file, HashSet<string> keptLabels, HashSet<int> keptBits)
+    {
         var scbLabels = scb.Switches.Select(s => s.Label).ToHashSet();
-        var alreadyConfigured = new List<(string Label, int MotorBit)>();
+        var alreadyConfigured = new List<(string Label, int MotorBit, int Slot)>();
         foreach (var (_, motorBit, label, slot) in BoardConfig.AllSwitchSlots())
         {
             if (!scbLabels.Contains(label)) continue;
-            if (arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot) != ArduinoDevice.Unset)
-                alreadyConfigured.Add((label, motorBit));
+            byte? motorVAddr = arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr + slot);
+            if (motorVAddr == null) { Console.WriteLine("EEPROM read failed — check the connection."); return false; }
+            if (motorVAddr != ArduinoDevice.Unset) alreadyConfigured.Add((label, motorBit, slot));
         }
+        if (alreadyConfigured.Count == 0) return true;
 
-        var assignedLabels = new HashSet<string>();
-        var firedBits = new HashSet<int>();
-
-        if (alreadyConfigured.Count > 0)
-        {
-            Console.WriteLine($"{alreadyConfigured.Count} switch(es) on {scb.Name} already have EEPROM config:");
-            foreach (var (label, motorBit) in alreadyConfigured)
-                Console.WriteLine($"  {label} (motor bit {motorBit})");
-            Console.WriteLine();
-            Console.Write("K = keep existing, only scan what's new   O = overwrite all, rescan everything   Esc = abort: ");
-            char choice = ReadChar(ch => char.ToUpper(ch) == 'K' || char.ToUpper(ch) == 'O' || ch == EscKey);
-            Console.WriteLine(choice == EscKey ? "[Esc]" : char.ToUpper(choice).ToString());
-            Console.WriteLine();
-
-            if (choice == EscKey)
-            {
-                Console.WriteLine("Motor scan aborted.");
-                Console.WriteLine();
-                return;
-            }
-            if (char.ToUpper(choice) == 'K')
-            {
-                foreach (var (label, motorBit) in alreadyConfigured)
-                {
-                    assignedLabels.Add(label);
-                    firedBits.Add(motorBit);
-                }
-            }
-            else
-            {
-                // 'O': clear this board's existing slot data up front, not just
-                // whichever slots get reassigned below. Previously a skipped/
-                // timed-out bit (no feedback seen) left the OLD slot bytes
-                // untouched, so "Overwrite" could silently leave stale,
-                // possibly-wrong motor-bit data behind for any switch that
-                // doesn't get reconfirmed this run -- which is exactly how two
-                // switches on this board ended up both pointing at the same
-                // physical motor bit after an earlier boards.json correction
-                // (one got rescanned onto its new bit, the other's old EEPROM
-                // entry just sat there unconfigured-but-not-cleared, still
-                // matching the new entry's bit by coincidence).
-                foreach (var (label, _) in alreadyConfigured)
-                {
-                    BoardConfig.TryFindSlotByLabel(label, out int staleSlot);
-                    arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr + staleSlot, ArduinoDevice.Unset);
-                }
-            }
-        }
-
-        bool userAborted = false;
-
-        for (int i = 0; i < scb.Switches.Count && !userAborted; i++)
-        {
-            int motorBit = scb.MotorBitFor(i);
-            if (firedBits.Contains(motorBit)) continue;
-
-            bool pinHandled = false;
-            while (!pinHandled && !userAborted)
-            {
-                Console.WriteLine($"Firing motor bit {motorBit}...");
-                int baseline = arduino.McpReadPort(vaddr, 'A');
-                if (baseline < 0)
-                {
-                    Console.WriteLine("  I2C error reading baseline. Aborting scan.");
-                    userAborted = true;
-                    break;
-                }
-
-                // Fire by toggling away from whatever the bit is currently at --
-                // NOT a hardcoded false. apply_board_hw() already leaves every
-                // motor bit at false (OLATB=0x00 safe default) right after boot,
-                // so firing with a hardcoded false was a no-op on a fresh board:
-                // nothing ever transitioned, so nothing moved. Reading back first
-                // guarantees an actual transition regardless of starting state.
-                int restOlatB = arduino.McpReadPort(vaddr, 'B');
-                if (restOlatB < 0)
-                {
-                    Console.WriteLine("  I2C error reading motor rest state. Aborting scan.");
-                    userAborted = true;
-                    break;
-                }
-                bool restState = ((restOlatB >> motorBit) & 1) != 0;
-                bool fireState = !restState;
-
-                if (!arduino.McpSetBit(vaddr, 'B', motorBit, fireState))
-                {
-                    Console.WriteLine("  I2C error firing motor. Aborting scan.");
-                    userAborted = true;
-                    break;
-                }
-
-                int changed = arduino.McpPollChange(vaddr, 'A', (byte)baseline, FeedbackTimeoutMs);
-                if (changed < 0)
-                {
-                    Console.WriteLine("  No feedback detected (timed out). Nothing may be installed at this position yet.");
-                    Console.Write("  1 = retry   0 = skip this pin   Esc = abort: ");
-                    char c = ReadChar(ch => ch == '1' || ch == '0' || ch == EscKey);
-                    Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
-                    if (c == EscKey) { userAborted = true; break; }
-                    if (c == '0') pinHandled = true;
-                    continue;
-                }
-
-                int diff = changed ^ baseline;
-                int pairLow = FindPairLow(diff);
-                if (pairLow < 0)
-                {
-                    Console.WriteLine($"  Anomaly: unexpected bits changed (diff=0x{diff:X2}).");
-                    Console.Write("  1 = retry   0 = skip this pin   Esc = abort: ");
-                    char c = ReadChar(ch => ch == '1' || ch == '0' || ch == EscKey);
-                    Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
-                    if (c == EscKey) { userAborted = true; break; }
-                    if (c == '0') pinHandled = true;
-                    continue;
-                }
-
-                int highBit = ((changed >> (pairLow + 1)) & 1) != 0 ? pairLow + 1 : pairLow;
-
-                var remaining = scb.Switches.Select(s => s.Label).Where(l => !assignedLabels.Contains(l)).ToList();
-                Console.WriteLine($"  Feedback changed on pair ({pairLow},{pairLow + 1}).");
-                Console.WriteLine("  Which switch moved?");
-                for (int r = 0; r < remaining.Count; r++)
-                    Console.WriteLine($"    {r + 1}) {remaining[r]}");
-                Console.Write("  Choice (0=skip, R=repeat, Esc=abort): ");
-
-                char choice = ReadChar(ch => ch == '0' || ch == EscKey || char.ToUpper(ch) == 'R' || (ch >= '1' && ch <= '9' && (ch - '1') < remaining.Count));
-                Console.WriteLine(choice == EscKey ? "[Esc]" : choice.ToString());
-
-                if (choice == EscKey) { userAborted = true; break; }
-                if (char.ToUpper(choice) == 'R')
-                {
-                    // Re-fire the motor from the top of the loop so the user can watch
-                    // it move again before deciding which switch it was.
-                    continue;
-                }
-                if (choice == '0')
-                {
-                    arduino.McpSetBit(vaddr, 'B', motorBit, false); // leave stalled — safe default
-                    pinHandled = true;
-                    continue;
-                }
-
-                string chosenLabel = remaining[choice - '1'];
-
-                Console.Write($"  Is {chosenLabel} now at:  R = Rett   A = Avvik: ");
-                char pos = char.ToUpper(ReadChar(ch => char.ToUpper(ch) == 'R' || char.ToUpper(ch) == 'A'));
-                Console.WriteLine(pos);
-
-                // polarity must be the literal OLATB bit value that drives to
-                // Rett -- Firmware.ino's cmdSW reads it that way directly
-                // (targetLevel = pos=='R' ? polarity : 1-polarity). fireState
-                // is the bit value the switch is actually AT right now, which
-                // `pos` was just confirmed against; if pos is Rett, fireState
-                // IS the Rett value, otherwise Rett is the opposite (restState).
-                // A hardcoded 0/1 here (ignoring fireState) only happened to
-                // work while firing always drove to a fixed value -- now that
-                // firing toggles from the real rest state, it doesn't.
-                bool rettBitValue = pos == 'R' ? fireState : !fireState;
-                byte polarity = (byte)(rettBitValue ? 1 : 0);
-                int otherBit = highBit == pairLow ? pairLow + 1 : pairLow;
-                byte rettBit  = pos == 'R' ? (byte)highBit : (byte)otherBit;
-                byte avvikBit = pos == 'R' ? (byte)otherBit : (byte)highBit;
-
-                // Verification move — not strictly required (the pair structure
-                // already implies the second bit), but catches wiring/mechanical
-                // faults at config time by confirming the opposite position too.
-                // Toggles back to the original rest state (not a hardcoded true),
-                // for the same reason firing above toggles instead of hardcoding.
-                Console.WriteLine("  Verifying opposite position...");
-                arduino.McpSetBit(vaddr, 'B', motorBit, restState);
-                int confirmChanged = arduino.McpPollChange(vaddr, 'A', (byte)changed, FeedbackTimeoutMs);
-                bool confirmed = confirmChanged >= 0 && ((confirmChanged >> otherBit) & 1) != 0;
-                if (!confirmed)
-                    Console.WriteLine("  Warning: opposite position not confirmed as expected — check wiring.");
-
-                if (!BoardConfig.TryFindSlotByLabel(chosenLabel, out int slot))
-                {
-                    Console.WriteLine("  Internal error: label has no slot. Skipping store.");
-                    pinHandled = true;
-                    continue;
-                }
-
-                arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr    + slot, vaddr);
-                arduino.EepromWrite(ArduinoDevice.RegionSlotMotorBit      + slot, (byte)motorBit);
-                arduino.EepromWrite(ArduinoDevice.RegionSlotPolarity      + slot, polarity);
-                arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackVAddr + slot, vaddr);
-                arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackRett  + slot, rettBit);
-                arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackAvvik + slot, avvikBit);
-
-                SystemConfigSession.SaveSwitch(file, chosenLabel, new SwitchEntry
-                {
-                    MotorVAddr = $"0x{vaddr:X2}",
-                    MotorBit = motorBit,
-                    Polarity = polarity,
-                    FeedbackVAddr = $"0x{vaddr:X2}",
-                    FeedbackRettBit = rettBit,
-                    FeedbackAvvikBit = avvikBit,
-                });
-
-                assignedLabels.Add(chosenLabel);
-                firedBits.Add(motorBit);
-                pinHandled = true;
-
-                Console.WriteLine($"  Stored: {chosenLabel} -> motorBit={motorBit} pol={polarity} Rett={rettBit} Avvik={avvikBit}");
-                Console.WriteLine();
-            }
-        }
-
-        Console.WriteLine(userAborted ? "Motor scan aborted." : "Motor scan complete.");
+        Console.WriteLine($"{alreadyConfigured.Count} switch(es) on {scb.Name} already have EEPROM config:");
+        foreach (var (label, motorBit, _) in alreadyConfigured)
+            Console.WriteLine($"  {label} (motor bit {motorBit})");
         Console.WriteLine();
+        Console.Write("K = keep existing, only scan what's new   O = overwrite all, rescan everything   Esc = abort: ");
+        char choice = char.ToUpper(ReadChar(ch => char.ToUpper(ch) == 'K' || char.ToUpper(ch) == 'O' || ch == EscKey));
+        Console.WriteLine(choice == EscKey ? "[Esc]" : choice.ToString());
+        Console.WriteLine();
+        if (choice == EscKey) return false;
+
+        if (choice == 'K')
+        {
+            foreach (var (label, motorBit, _) in alreadyConfigured)
+            {
+                keptLabels.Add(label);
+                keptBits.Add(motorBit);
+            }
+            return true;
+        }
+
+        // 'O': clear this board's existing slot data up front, not just
+        // whichever slots get reassigned below. Otherwise a skipped/timed-out
+        // bit (no feedback seen) leaves the OLD slot bytes behind -- which is
+        // how two switches on this board once ended up both pointing at the
+        // same physical motor bit. The mirror drops them too, so a later
+        // Restore can't write them back.
+        foreach (var (label, _, slot) in alreadyConfigured)
+        {
+            if (!arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr + slot, ArduinoDevice.Unset))
+            {
+                Console.WriteLine($"Failed to clear {label} — no response from Arduino.");
+                SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
+                return false;
+            }
+            file.Switches.Remove(label);
+        }
+        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
+        return true;
+    }
+
+    // Fires one motor bit until the operator assigns it to a switch, skips
+    // it, or aborts. Stores an assignment in EEPROM, then mirrors it.
+    // False = abort the whole scan.
+    bool ScanBit(BoardScb scb, int motorBit, HashSet<string> assignedLabels, SystemConfigFile file)
+    {
+        byte vaddr = scb.VirtualAddress;
+        while (true)
+        {
+            Console.WriteLine($"Firing motor bit {motorBit}...");
+            int baseline = arduino.McpReadPort(vaddr, 'A');
+            if (baseline < 0) { Console.WriteLine("  I2C error reading baseline. Aborting scan."); return false; }
+
+            // Fire by toggling away from whatever the bit is currently at --
+            // NOT a hardcoded false. apply_board_hw() already leaves every
+            // motor bit at false (OLATB=0x00 safe default) right after boot,
+            // so firing with a hardcoded false was a no-op on a fresh board:
+            // nothing ever transitioned, so nothing moved. Reading back first
+            // guarantees an actual transition regardless of starting state.
+            int restOlatB = arduino.McpReadPort(vaddr, 'B');
+            if (restOlatB < 0) { Console.WriteLine("  I2C error reading motor rest state. Aborting scan."); return false; }
+            bool restState = ((restOlatB >> motorBit) & 1) != 0;
+            bool fireState = !restState;
+
+            if (!arduino.McpSetBit(vaddr, 'B', motorBit, fireState)) { Console.WriteLine("  I2C error firing motor. Aborting scan."); return false; }
+
+            int changed = arduino.McpPollChange(vaddr, 'A', (byte)baseline, FeedbackTimeoutMs);
+            int pairLow = changed < 0 ? -1 : FindPairLow(changed ^ baseline);
+            if (pairLow < 0)
+            {
+                Console.WriteLine(changed < 0
+                    ? "  No feedback detected (timed out). Nothing may be installed at this position yet."
+                    : $"  Anomaly: unexpected bits changed (diff=0x{changed ^ baseline:X2}).");
+                Console.Write("  1 = retry   0 = skip this pin   Esc = abort: ");
+                char c = ReadChar(ch => ch == '1' || ch == '0' || ch == EscKey);
+                Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
+                if (c == EscKey) return false;
+                if (c == '0') return true;
+                continue;
+            }
+
+            var remaining = scb.Switches.Select(s => s.Label).Where(l => !assignedLabels.Contains(l)).ToList();
+            Console.WriteLine($"  Feedback changed on pair ({pairLow},{pairLow + 1}).");
+            Console.WriteLine("  Which switch moved?");
+            for (int r = 0; r < remaining.Count; r++)
+                Console.WriteLine($"    {r + 1}) {remaining[r]}");
+            Console.Write("  Choice (0=skip, R=repeat, Esc=abort): ");
+
+            char choice = ReadChar(ch => ch == '0' || ch == EscKey || char.ToUpper(ch) == 'R' || (ch >= '1' && ch <= '9' && (ch - '1') < remaining.Count));
+            Console.WriteLine(choice == EscKey ? "[Esc]" : choice.ToString());
+
+            if (choice == EscKey) return false;
+            // R: re-fire from the top so the user can watch it move again.
+            if (char.ToUpper(choice) == 'R') continue;
+            if (choice == '0')
+            {
+                arduino.McpSetBit(vaddr, 'B', motorBit, false); // leave stalled — safe default
+                return true;
+            }
+
+            string chosenLabel = remaining[choice - '1'];
+            Console.Write($"  Is {chosenLabel} now at:  R = Rett   A = Avvik: ");
+            char pos = char.ToUpper(ReadChar(ch => char.ToUpper(ch) == 'R' || char.ToUpper(ch) == 'A'));
+            Console.WriteLine(pos);
+
+            var (polarity, rettBit, avvikBit) = FeedbackMapping(fireState, pos == 'R', pairLow, changed);
+            int otherBit = pos == 'R' ? avvikBit : rettBit;
+
+            // Verification move — not strictly required (the pair structure
+            // already implies the second bit), but catches wiring/mechanical
+            // faults at config time by confirming the opposite position too.
+            // Toggles back to the original rest state (not a hardcoded true),
+            // for the same reason firing above toggles instead of hardcoding.
+            Console.WriteLine("  Verifying opposite position...");
+            arduino.McpSetBit(vaddr, 'B', motorBit, restState);
+            int confirmChanged = arduino.McpPollChange(vaddr, 'A', (byte)changed, FeedbackTimeoutMs);
+            if (confirmChanged < 0 || ((confirmChanged >> otherBit) & 1) == 0)
+                Console.WriteLine("  Warning: opposite position not confirmed as expected — check wiring.");
+
+            if (!BoardConfig.TryFindSlotByLabel(chosenLabel, out int slot))
+            {
+                Console.WriteLine("  Internal error: label has no slot. Skipping store.");
+                return true;
+            }
+
+            var data = new SwitchSlotData(vaddr, (byte)motorBit, polarity, vaddr, rettBit, avvikBit);
+            if (!data.Write(arduino, slot))
+            {
+                Console.WriteLine($"  EEPROM write failed for {chosenLabel} -- slot may be half-written, not mirrored. Aborting scan.");
+                return false;
+            }
+            data.ApplyTo(file, chosenLabel);
+            SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
+            assignedLabels.Add(chosenLabel);
+
+            Console.WriteLine($"  Stored: {chosenLabel} -> motorBit={motorBit} pol={polarity} Rett={rettBit} Avvik={avvikBit}");
+            Console.WriteLine();
+            return true;
+        }
+    }
+
+    // Maps one observed motor move to the slot's polarity and feedback bits.
+    // `fireState` is the OLATB bit value the motor was just driven to, and
+    // `atRett` whether the operator saw it end at Rett. `changed` is the
+    // feedback port after the move; of the changed pair (pairLow, pairLow+1),
+    // the bit now high is the contact for the position just reached.
+    // Polarity must be the literal OLATB bit value that drives to Rett --
+    // Firmware.ino's cmdSW reads it that way directly (targetLevel = pos=='R'
+    // ? polarity : 1-polarity): fireState if the move ended at Rett, else
+    // the opposite.
+    internal static (byte Polarity, byte RettBit, byte AvvikBit) FeedbackMapping(bool fireState, bool atRett, int pairLow, int changed)
+    {
+        int reachedBit = ((changed >> (pairLow + 1)) & 1) != 0 ? pairLow + 1 : pairLow;
+        int otherBit = reachedBit == pairLow ? pairLow + 1 : pairLow;
+        byte polarity = (byte)((atRett ? fireState : !fireState) ? 1 : 0);
+        return atRett
+            ? (polarity, (byte)reachedBit, (byte)otherBit)
+            : (polarity, (byte)otherBit, (byte)reachedBit);
     }
 
     // -------------------------------------------------------------------------
@@ -337,7 +285,7 @@ static class ConfigSession
     // deferred, see PLAN_Phase3.md), so the candidate bits are asked for
     // directly rather than declared.
     // -------------------------------------------------------------------------
-    static void SignalScan(ArduinoDevice arduino)
+    public void SignalScan()
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 2: Signal Scan ---");
@@ -345,13 +293,7 @@ static class ConfigSession
         Console.WriteLine("Esc = abort at any point.");
         Console.WriteLine();
 
-        var scbs = BoardConfig.Svb.Scbs;
-        Console.WriteLine("Boards: " + string.Join("  ", scbs.Select((b, i) => $"{i + 1}={b.Name}")));
-        Console.Write("Select board (or Esc): ");
-        char boardChoice = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '9' && (ch - '1') < scbs.Count));
-        Console.WriteLine(boardChoice == EscKey ? "[Esc]" : boardChoice.ToString());
-        if (boardChoice == EscKey) { Console.WriteLine(); return; }
-        var scb = scbs[boardChoice - '1'];
+        if (PickScb() is not { } scb) return;
         byte vaddr = scb.VirtualAddress;
 
         int[] bits;
@@ -442,13 +384,14 @@ static class ConfigSession
         }
 
         var file = SystemConfigSession.LoadOrNew();
-        SystemConfigSession.SaveSignal(file, scb.Name, new SignalEntry
+        file.Signals[scb.Name] = new SignalEntry
         {
             VAddr = $"0x{vaddr:X2}",
             RedBit = redBit,
             Green1Bit = green1Bit,
             Green2Bit = green2Bit,
-        });
+        };
+        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
 
         Console.WriteLine($"Stored: Red=bit{redBit} Green1=bit{green1Bit} Green2=bit{green2Bit}");
         Console.WriteLine("Signal scan complete.");
@@ -462,20 +405,14 @@ static class ConfigSession
     // only the polarity needs a live, human-confirmed observation. Asked for
     // as a fallback on boards that don't declare it.
     // -------------------------------------------------------------------------
-    static void TrackDetectionScan(ArduinoDevice arduino)
+    public void TrackDetectionScan()
     {
         Console.WriteLine();
         Console.WriteLine("--- Command 3: Track Detection ---");
         Console.WriteLine("Reads the live bit and asks you to confirm what it means.");
         Console.WriteLine();
 
-        var scbs = BoardConfig.Svb.Scbs;
-        Console.WriteLine("Boards: " + string.Join("  ", scbs.Select((b, i) => $"{i + 1}={b.Name}")));
-        Console.Write("Select board (or Esc): ");
-        char boardChoice = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '9' && (ch - '1') < scbs.Count));
-        Console.WriteLine(boardChoice == EscKey ? "[Esc]" : boardChoice.ToString());
-        if (boardChoice == EscKey) { Console.WriteLine(); return; }
-        var scb = scbs[boardChoice - '1'];
+        if (PickScb() is not { } scb) return;
         byte vaddr = scb.VirtualAddress;
 
         int bit;
@@ -522,12 +459,13 @@ static class ConfigSession
         }
 
         var file = SystemConfigSession.LoadOrNew();
-        SystemConfigSession.SaveTrackDetection(file, scb.Name, new TrackDetectionEntry
+        file.TrackDetections[scb.Name] = new TrackDetectionEntry
         {
             VAddr = $"0x{vaddr:X2}",
             Bit = bit,
             ActiveHigh = activeHigh,
-        });
+        };
+        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
 
         Console.WriteLine($"Stored: bit {bit}, {(activeHigh ? "HIGH" : "LOW")} = train present.");
         Console.WriteLine("Track detection complete.");
@@ -544,7 +482,7 @@ static class ConfigSession
     // install's wiring can be safely characterized (I2CD, hand-probing) with
     // zero risk of the board trying to actually drive a bus that hasn't been
     // verified yet. Switch to Prod once satisfied -- takes a reset to apply.
-    static void ModeConfig(ArduinoDevice arduino)
+    public void ModeConfig()
     {
         Console.WriteLine();
         Console.WriteLine("--- Command M: Test/Prod Mode ---");
@@ -580,13 +518,13 @@ static class ConfigSession
         char resetNow = char.ToUpper(Console.ReadKey(intercept: true).KeyChar);
         Console.WriteLine(resetNow);
         if (resetNow == 'Y')
-            Restart(arduino);
+            Restart();
         else
             Console.WriteLine("  Not applied yet -- reset later (Config -> A) when ready.");
         Console.WriteLine();
     }
 
-    static void Restart(ArduinoDevice arduino)
+    public void Restart()
     {
         arduino.SoftReset();
         Console.WriteLine("  Reset sent -- waiting for the board to restart...");
@@ -603,7 +541,26 @@ static class ConfigSession
         Console.WriteLine();
     }
 
-    static void ResetConfig(ArduinoDevice arduino)
+    // Read-only: dumps the hardware and system tables and lists every record
+    // that points at a missing board, a wrong-direction pin, or an output
+    // pin another record already drives.
+    public void VerifyEeprom()
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Verify EEPROM (read-only) ---");
+        var chips = arduino.HardwareConfigDownload();
+        var lines = arduino.SystemConfigDownload();
+        if (chips == null || lines == null) { Console.WriteLine("Timeout reading EEPROM from the Arduino."); Console.WriteLine(); return; }
+
+        var problems = EepromCheck.Problems(chips, lines);
+        foreach (string p in problems) Console.WriteLine($"  {p}");
+        Console.WriteLine(problems.Count == 0
+            ? $"EEPROM OK: {chips.Count} board(s), {lines.Count} config record(s)."
+            : $"{problems.Count} problem(s) found.");
+        Console.WriteLine();
+    }
+
+    public void ResetConfig()
     {
         Console.WriteLine();
         Console.WriteLine("--- Command R: Reset Configuration ---");

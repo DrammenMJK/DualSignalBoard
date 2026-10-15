@@ -32,7 +32,7 @@ sealed class InverterEnableDeclaration
 // operator panel switches only), or Combined (both, on the same vaddr --
 // declared as separate SCB- and SVB-shaped entries sharing chips, per the
 // site owner). Only SCB/Combined are consumed into BoardScb today; SVB-only
-// boards are kept in AllBoards for visibility but have no functional
+// boards only feed PanelBoards; they have no functional
 // scan/command support yet.
 sealed class BoardDeclaration
 {
@@ -140,10 +140,6 @@ static class BoardConfig
     public static BoardSvb Svb { get; private set; } =
         new BoardSvb("(not loaded)", 0, Array.Empty<BoardScb>());
 
-    // Every declared board, including SVB-only ones -- not consumed into
-    // Scbs, but kept for visibility (status views, future SVB support).
-    public static IReadOnlyList<BoardDeclaration> AllBoards { get; private set; } = Array.Empty<BoardDeclaration>();
-
     public static void Load(string path)
     {
         var file = JsonSerializer.Deserialize<BoardsFile>(File.ReadAllText(path), ReadOptions) ?? new BoardsFile();
@@ -155,6 +151,7 @@ static class BoardConfig
     // HardwareConfig.Flatten() taking an in-memory HardwareConfigFile).
     public static void ApplyBoardsFile(BoardsFile file)
     {
+        foreach (var b in file.Boards) Validate(b);
         bool testMode = file.AddressMode != "prod";
 
         var scbs = file.Boards
@@ -169,7 +166,6 @@ static class BoardConfig
                 string.Join("; ", dupes.Select(g => $"'{g.Key}' on {string.Join(" and ", g.Select(x => x.Name))}")));
 
         Svb = new BoardSvb(file.Svb.Name, file.Svb.Number, scbs);
-        AllBoards = file.Boards;
         PanelBoards = file.Boards
             .Where(b => b.Category is "SVB" or "Combined")
             .Select(b => (b.Name, VAddrs(b, testMode)))
@@ -181,6 +177,19 @@ static class BoardConfig
     // work on.
     public static IReadOnlyList<(string Name, IReadOnlyList<byte> VAddrs)> PanelBoards { get; private set; } =
         Array.Empty<(string, IReadOnlyList<byte>)>();
+
+    // Config typos fail here, at startup, instead of as a crash halfway
+    // through a physical scan.
+    static void Validate(BoardDeclaration b)
+    {
+        string? problem =
+            b.Category is not ("SCB" or "SVB" or "Combined") ? $"category '{b.Category}' must be SCB, SVB or Combined" :
+            b.MotorBits != null && b.MotorBits.Count != b.Switches.Count ? $"motorBits has {b.MotorBits.Count} entries but switches has {b.Switches.Count}" :
+            b.SignalBits != null && b.SignalBits.Count != 3 ? $"signalBits needs exactly 3 bits (Red/Green1/Green2), has {b.SignalBits.Count}" :
+            b.InverterEnable != null && b.InverterEnable.Port is not ("A" or "B") ? $"inverterEnable.port '{b.InverterEnable.Port}' must be A or B" :
+            null;
+        if (problem != null) throw new InvalidOperationException($"boards.json, board '{b.Name}': {problem}.");
+    }
 
     static IReadOnlyList<byte> VAddrs(BoardDeclaration b, bool testMode) =>
         b.Chips.Select(hex => ArduinoDevice.VirtualAddress(testMode ? 0 : b.Bus, Convert.ToByte(hex, 16))).ToList();

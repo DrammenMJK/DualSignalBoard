@@ -10,23 +10,32 @@ readonly record struct SwitchSlotData(
 {
     public bool IsConfigured => MotorVAddr != ArduinoDevice.Unset;
 
-    public static SwitchSlotData Read(ArduinoDevice arduino, int slot) => new(
-        arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr    + slot),
-        arduino.EepromRead(ArduinoDevice.RegionSlotMotorBit      + slot),
-        arduino.EepromRead(ArduinoDevice.RegionSlotPolarity      + slot),
-        arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackVAddr + slot),
-        arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackRett  + slot),
-        arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackAvvik + slot));
-
-    public void Write(ArduinoDevice arduino, int slot)
+    // Null if any byte didn't read back -- a dropped connection must never
+    // look like an unconfigured (0xFF) slot.
+    public static SwitchSlotData? Read(IArduinoDevice arduino, int slot)
     {
-        arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr    + slot, MotorVAddr);
-        arduino.EepromWrite(ArduinoDevice.RegionSlotMotorBit      + slot, MotorBit);
-        arduino.EepromWrite(ArduinoDevice.RegionSlotPolarity      + slot, Polarity);
-        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackVAddr + slot, FeedbackVAddr);
-        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackRett  + slot, FeedbackRett);
-        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackAvvik + slot, FeedbackAvvik);
+        byte?[] b =
+        [
+            arduino.EepromRead(ArduinoDevice.RegionSlotMotorVAddr    + slot),
+            arduino.EepromRead(ArduinoDevice.RegionSlotMotorBit      + slot),
+            arduino.EepromRead(ArduinoDevice.RegionSlotPolarity      + slot),
+            arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackVAddr + slot),
+            arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackRett  + slot),
+            arduino.EepromRead(ArduinoDevice.RegionSlotFeedbackAvvik + slot),
+        ];
+        if (b.Any(v => v == null)) return null;
+        return new SwitchSlotData(b[0]!.Value, b[1]!.Value, b[2]!.Value, b[3]!.Value, b[4]!.Value, b[5]!.Value);
     }
+
+    // Stops at the first byte the board doesn't OK. False = slot may be
+    // half-written; the caller must not mirror it into SystemConfig.json.
+    public bool Write(IArduinoDevice arduino, int slot) =>
+        arduino.EepromWrite(ArduinoDevice.RegionSlotMotorVAddr    + slot, MotorVAddr) &&
+        arduino.EepromWrite(ArduinoDevice.RegionSlotMotorBit      + slot, MotorBit) &&
+        arduino.EepromWrite(ArduinoDevice.RegionSlotPolarity      + slot, Polarity) &&
+        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackVAddr + slot, FeedbackVAddr) &&
+        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackRett  + slot, FeedbackRett) &&
+        arduino.EepromWrite(ArduinoDevice.RegionSlotFeedbackAvvik + slot, FeedbackAvvik);
 
     // Builds/removes the SystemConfig.json mirror entry for this slot's data,
     // keeping the JSON file consistent with whatever EEPROM (authoritative)

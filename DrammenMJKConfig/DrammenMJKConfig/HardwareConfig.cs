@@ -50,8 +50,8 @@ static class HardwareConfig
     public static void Save(HardwareConfigFile file, string path) =>
         File.WriteAllText(path, JsonSerializer.Serialize(file, WriteOptions));
 
-    // One flattened chip row, exactly what HWU sends over the wire.
-    public readonly record struct ResolvedChip(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB, string BoardName);
+    // One chip's register row, exactly what HWU sends and HWD returns.
+    public readonly record struct ResolvedChip(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB);
 
     // Flattens every board's every chip into resolved register rows. Returns
     // null (with `error` set) if any chip still has a "tbd" entry -- a chip
@@ -79,7 +79,7 @@ static class HardwareConfig
                         return null;
                     }
                 }
-                result.Add(new ResolvedChip(chip.VAddrByte, iodirA, iodirB, gppuA, gppuB, board.Name));
+                result.Add(new ResolvedChip(chip.VAddrByte, iodirA, iodirB, gppuA, gppuB));
             }
         }
         error = null;

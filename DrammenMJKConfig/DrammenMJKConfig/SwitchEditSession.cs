@@ -4,20 +4,21 @@ namespace DrammenMJKConfig;
 // misidentified which physical switch moved and gave it the wrong label.
 // Re-running the whole physical Motor Scan just to fix a labeling mistake
 // is wasteful -- these edit EEPROM (source of truth) and SystemConfig.json
-// (its mirror) directly, no motor movement involved.
-static class SwitchEditSession
+// (its mirror) directly, no motor movement involved. The mirror is only
+// updated once every EEPROM read and write has succeeded.
+sealed class SwitchEditSession(IArduinoDevice arduino, SwitchTable switchTable)
 {
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("--- Edit switch config (fix labeling/polarity mistakes) ---");
-        SwitchTable.Print(arduino);
+        switchTable.Print();
 
         new Menu(
             [
-                ('T', "Show table",                                            () => SwitchTable.Print(arduino)),
-                ('P', "Swap Rett/Avvik for one switch (fixes a misjudged R/A)", () => SwapPolarity(arduino)),
-                ('S', "Swap two switches (fixes a mislabeled switch)",         () => SwapLabels(arduino)),
+                ('T', "Show table",                                            switchTable.Print),
+                ('P', "Swap Rett/Avvik for one switch (fixes a misjudged R/A)", SwapPolarity),
+                ('S', "Swap two switches (fixes a mislabeled switch)",         SwapLabels),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -25,28 +26,42 @@ static class SwitchEditSession
         Console.WriteLine();
     }
 
-    static bool TryPromptLabel(string prompt, out string label)
+    static bool TryPromptLabel(string prompt, out string label, out int slot)
     {
         Console.Write($"{prompt}: ");
         string? input = Console.ReadLine()?.Trim();
-        if (!string.IsNullOrEmpty(input) && BoardConfig.TryFindSlotByLabel(input, out _)) { label = input; return true; }
+        if (!string.IsNullOrEmpty(input) && BoardConfig.TryFindSlotByLabel(input, out slot)) { label = input; return true; }
         Console.WriteLine("  Unknown label.");
         label = "";
+        slot = -1;
         return false;
     }
 
-    static void SwapPolarity(ArduinoDevice arduino)
+    SwitchSlotData? Read(int slot)
+    {
+        var d = SwitchSlotData.Read(arduino, slot);
+        if (d == null) Console.WriteLine("  EEPROM read failed -- nothing changed. Check the connection and retry.");
+        return d;
+    }
+
+    bool Write(SwitchSlotData d, int slot, string label)
+    {
+        if (d.Write(arduino, slot)) return true;
+        Console.WriteLine($"  EEPROM write failed for {label} -- the slot may be half-written and SystemConfig.json was NOT updated. Check the table and retry.");
+        return false;
+    }
+
+    void SwapPolarity()
     {
         Console.WriteLine();
-        if (!TryPromptLabel("Label", out string label)) return;
-        BoardConfig.TryFindSlotByLabel(label, out int slot);
+        if (!TryPromptLabel("Label", out string label, out int slot)) return;
 
-        var d = SwitchSlotData.Read(arduino, slot);
+        if (Read(slot) is not { } d) return;
         if (!d.IsConfigured) { Console.WriteLine("  Not configured yet."); return; }
 
         byte newPol = (byte)(d.Polarity == 0 ? 1 : 0);
         var swapped = d with { Polarity = newPol, FeedbackRett = d.FeedbackAvvik, FeedbackAvvik = d.FeedbackRett };
-        swapped.Write(arduino, slot);
+        if (!Write(swapped, slot, label)) return;
 
         var file = SystemConfigSession.LoadOrNew();
         swapped.ApplyTo(file, label);
@@ -54,22 +69,18 @@ static class SwitchEditSession
 
         Console.WriteLine($"  {label}: polarity {d.Polarity} -> {newPol}, " +
                            $"Rett/Avvik {d.FeedbackRett}/{d.FeedbackAvvik} -> {swapped.FeedbackRett}/{swapped.FeedbackAvvik}.");
-        SwitchTable.Print(arduino);
+        switchTable.Print();
     }
 
-    static void SwapLabels(ArduinoDevice arduino)
+    void SwapLabels()
     {
         Console.WriteLine();
-        if (!TryPromptLabel("First label", out string labelA)) return;
-        if (!TryPromptLabel("Second label", out string labelB)) return;
+        if (!TryPromptLabel("First label", out string labelA, out int slotA)) return;
+        if (!TryPromptLabel("Second label", out string labelB, out int slotB)) return;
         if (labelA == labelB) { Console.WriteLine("  Same label twice -- nothing to do."); return; }
-        BoardConfig.TryFindSlotByLabel(labelA, out int slotA);
-        BoardConfig.TryFindSlotByLabel(labelB, out int slotB);
 
-        var dataA = SwitchSlotData.Read(arduino, slotA);
-        var dataB = SwitchSlotData.Read(arduino, slotB);
-        dataB.Write(arduino, slotA);
-        dataA.Write(arduino, slotB);
+        if (Read(slotA) is not { } dataA || Read(slotB) is not { } dataB) return;
+        if (!Write(dataB, slotA, labelA) || !Write(dataA, slotB, labelB)) return;
 
         var file = SystemConfigSession.LoadOrNew();
         dataB.ApplyTo(file, labelA);
@@ -77,6 +88,6 @@ static class SwitchEditSession
         SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
 
         Console.WriteLine($"  Swapped {labelA} <-> {labelB}.");
-        SwitchTable.Print(arduino);
+        switchTable.Print();
     }
 }

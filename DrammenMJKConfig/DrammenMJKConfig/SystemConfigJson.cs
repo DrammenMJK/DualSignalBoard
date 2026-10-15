@@ -156,7 +156,8 @@ static class SystemConfigJson
         return lines;
     }
 
-    // One LED table entry -- also used on its own for single-LED edits.
+    // One LED table entry -- also used on its own for single-LED edits
+    // (pass led.Index there, so the edit hits the board's own entry).
     public static string LedLine(int index, PanelLedEntry led)
     {
         byte target = (byte)(led.Target != SignalTarget && BoardConfig.TryFindSlotByLabel(led.Target ?? "", out int s) ? s : 0xFF);
@@ -227,6 +228,7 @@ static class SystemConfigJson
                         if (!clearedLeds) { file.PanelLeds.Clear(); clearedLeds = true; }
                         file.PanelLeds.Add(new PanelLedEntry
                         {
+                            Index = int.Parse(parts[1]),
                             VAddr = HexStr(parts[2]),
                             Port = parts[3],
                             Bit = Convert.ToInt32(parts[4], 16),

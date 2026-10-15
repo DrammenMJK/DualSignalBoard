@@ -3,13 +3,12 @@ namespace DrammenMJKConfig;
 // Upload/download SystemConfig.json <-> the switch/SVB-switch/dreieskive/
 // status-LED/fade-config EEPROM regions. EEPROM stays authoritative for what
 // firmware runs against; this file is a mirror, kept in sync automatically by
-// MotorScan (SaveSwitch/SaveDreieskiveAndLed) and explicitly via this session's
-// Upload/Download actions.
-static class SystemConfigSession
+// the scans and explicitly via this session's Upload/Download actions.
+sealed class SystemConfigSession(IArduinoDevice arduino)
 {
     public const string DefaultPath = "SystemConfig.json";
 
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("--- System Config Backup (SystemConfig.json) ---");
@@ -17,8 +16,8 @@ static class SystemConfigSession
 
         new Menu(
             [
-                ('U', "Restore — upload SystemConfig.json to Arduino", () => Upload(arduino)),
-                ('D', "Backup — download from Arduino to SystemConfig.json", () => Download(arduino)),
+                ('U', "Restore — upload SystemConfig.json to Arduino", Upload),
+                ('D', "Backup — download from Arduino to SystemConfig.json", Download),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -29,52 +28,6 @@ static class SystemConfigSession
             ? SystemConfigJson.Load(path)
             : new SystemConfigFile { Site = "Fossli", Svb = BoardConfig.Svb.Name };
 
-    // Called by MotorScan after each slot is confirmed -- an aborted scan still
-    // leaves a file that matches whatever EEPROM actually has.
-    public static void SaveSwitch(SystemConfigFile file, string label, SwitchEntry entry, string path = DefaultPath)
-    {
-        file.Switches[label] = entry;
-        SystemConfigJson.Save(file, path);
-    }
-
-    // Called once at the start of a Motor Scan session, only for the board
-    // that actually owns the site's one dreieskive (declared, not scanned).
-    public static void SaveDreieskive(SystemConfigFile file, DreieskiveEntry drei, string path = DefaultPath)
-    {
-        file.Dreieskive = drei;
-        SystemConfigJson.Save(file, path);
-    }
-
-    // Called once at the start of a Motor Scan session for whichever board is
-    // being scanned -- every board has its own status LED, keyed by name.
-    public static void SaveStatusLed(SystemConfigFile file, string boardName, StatusLedEntry led, string path = DefaultPath)
-    {
-        file.StatusLeds[boardName] = led;
-        SystemConfigJson.Save(file, path);
-    }
-
-    // Called once at the start of a Motor Scan session, for boards that
-    // declare an inverter-enable pin in boards.json.
-    public static void SaveInverterEnable(SystemConfigFile file, string boardName, InverterEnableEntry entry, string path = DefaultPath)
-    {
-        file.InverterEnables[boardName] = entry;
-        SystemConfigJson.Save(file, path);
-    }
-
-    // Called by Signal Scan once a board's signal lamp bits are confirmed.
-    public static void SaveSignal(SystemConfigFile file, string boardName, SignalEntry signal, string path = DefaultPath)
-    {
-        file.Signals[boardName] = signal;
-        SystemConfigJson.Save(file, path);
-    }
-
-    // Called by Track Detection Scan once a board's polarity is confirmed.
-    public static void SaveTrackDetection(SystemConfigFile file, string boardName, TrackDetectionEntry entry, string path = DefaultPath)
-    {
-        file.TrackDetections[boardName] = entry;
-        SystemConfigJson.Save(file, path);
-    }
-
     static string PromptPath()
     {
         Console.Write($"Path [{DefaultPath}]: ");
@@ -82,7 +35,7 @@ static class SystemConfigSession
         return string.IsNullOrEmpty(input) ? DefaultPath : input;
     }
 
-    static void Upload(ArduinoDevice arduino)
+    void Upload()
     {
         string path = PromptPath();
         if (!File.Exists(path))
@@ -105,42 +58,26 @@ static class SystemConfigSession
         Console.WriteLine($"Parsed {switchCount} switch(es), {svbSwitchCount} SVB switch(es).");
         Console.Write("Uploading...");
 
-        if (!arduino.SystemConfigUploadStart())
-        {
-            Console.WriteLine(" Arduino did not respond with READY. Aborting.");
-            Console.WriteLine();
-            return;
-        }
-
-        bool ok = true;
-        foreach (string line in lines)
-        {
-            if (!arduino.SystemConfigSendLine(line))
-            {
-                Console.WriteLine($"\nError on line '{line}'. Aborting upload.");
-                arduino.SystemConfigUploadAbort();
-                ok = false;
-                break;
-            }
-        }
-
-        if (ok)
-        {
-            Console.WriteLine(arduino.SystemConfigUploadFinish()
-                ? " Done. System config stored — no physical re-scan needed."
-                : " Upload finished but device did not confirm storage.");
-        }
+        string? error = arduino.SystemConfigSend(lines);
+        Console.WriteLine(error == null
+            ? " Done. System config stored — no physical re-scan needed."
+            : $" Failed: {error}.");
         Console.WriteLine();
     }
 
-    static void Download(ArduinoDevice arduino)
+    // The board's tables replace the file's: SCD leaves out empty slots, so
+    // merging into the old file would keep entries the board no longer has.
+    void Download()
     {
         string path = PromptPath();
-        SystemConfigFile file = LoadOrNew(path);
+        SystemConfigFile old;
+        try { old = LoadOrNew(path); }
+        catch (Exception ex) { Console.WriteLine($"Failed to parse {path}: {ex.Message}"); Console.WriteLine(); return; }
 
         var lines = arduino.SystemConfigDownload();
         if (lines == null) { Console.WriteLine("Timeout waiting for device."); return; }
 
+        var file = new SystemConfigFile { Todo = old.Todo, Site = old.Site, Svb = old.Svb };
         SystemConfigJson.ApplyDownloadLines(file, lines);
 
         try

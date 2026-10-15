@@ -4,6 +4,16 @@ Console.WriteLine("DrammenMJKConfig — Arduino Configuration Tool");
 Console.WriteLine("==============================================");
 Console.WriteLine();
 
+// Every relative path from here on (boards.json, hardware.json,
+// SystemConfig.json and paths typed at prompts) means the config folder.
+if (ConfigFolder.Find(AppContext.BaseDirectory) is not { } configFolder)
+{
+    Console.WriteLine($"Can't find the repo root (.git) above {AppContext.BaseDirectory} -- run the tool from its git clone.");
+    return;
+}
+Directory.SetCurrentDirectory(configFolder);
+Console.WriteLine($"Config folder: {configFolder}");
+
 const string BoardsPath = "boards.json";
 try
 {
@@ -37,13 +47,54 @@ Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();
 
-var menu = new Menu(
+// Composition root: every session gets the board (and what else it needs) here.
+var switchTable = new SwitchTable(arduino);
+var config = new ConfigSession(arduino);
+var hardwareConfig = new HardwareConfigSession(arduino);
+var panelScan = new PanelScanSession(arduino);
+var panelEdit = new PanelEditSession(panelScan);
+var systemConfig = new SystemConfigSession(arduino);
+var switchEdit = new SwitchEditSession(arduino, switchTable);
+var benchTest = new BenchTestSession(arduino);
+var command = new CommandSession(arduino);
+var status = new StatusSession(arduino, switchTable);
+
+var configMenu = new Menu(
     [
-        ('C', "Config mode", () => ConfigSession.Run(arduino)),
-        ('O', "Operate — drive motors, signals, status lights", () => CommandSession.Run(arduino)),
-        ('S', "Status — EEPROM summary", () => StatusSession.Run(arduino)),    ],
-    quitOption: ('Q', "Quit")
+        ('H', "Hardware config (upload/download hardware.json)",   hardwareConfig.Run),
+        ('1', "Motor scan — find switch motors + feedback",         config.MotorScan),
+        ('2', "Signal scan — find signal lamp bits (Red/Green1/Green2)", config.SignalScan),
+        ('3', "Track detection — set which bit + level means train present", config.TrackDetectionScan),
+        ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", panelScan.LedScan),
+        ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", panelScan.SwitchScan),
+        ('6', "Edit panel config (SVB) — fix labeling/polarity mistakes", panelEdit.Run),
+        ('J', "System Config Backup (backup/restore)",              systemConfig.Run),
+        ('E', "Edit switch config — fix labeling/polarity mistakes", switchEdit.Run),
+        ('B', "Bench test — probe/read/write raw MCP23017 pins",   benchTest.Run),
+        ('M', "Test/Prod mode — enable/disable I2C at boot",       config.ModeConfig),
+        ('V', "Verify EEPROM — check config for broken references/pins", config.VerifyEeprom),
+        ('R', "Reset: erase all config from EEPROM",               config.ResetConfig),
+        ('A', "Restart Arduino (watchdog reset, re-runs setup())", config.Restart),
+    ],
+    quitOption: ('Q', "Exit config mode")
 );
-menu.Run();
+
+void RunConfig()
+{
+    Console.WriteLine();
+    Console.WriteLine("=== Config Mode ===");
+    configMenu.Run();
+    Console.WriteLine("Exiting config mode.");
+    Console.WriteLine();
+}
+
+new Menu(
+    [
+        ('C', "Config mode", RunConfig),
+        ('O', "Operate — drive motors, signals, status lights", command.Run),
+        ('S', "Status — EEPROM summary", status.Run),
+    ],
+    quitOption: ('Q', "Quit")
+).Run();
 
 Console.WriteLine("Goodbye.");

@@ -7,7 +7,7 @@ namespace DrammenMJKConfig;
 // mapping is exactly what's being discovered. Switch-table commands (Drive/Read
 // Switch) never mention port/bit -- firmware resolves that itself from the
 // switch table. See PLAN_Phase1.md for the full protocol design.
-sealed class ArduinoDevice
+sealed class ArduinoDevice : IArduinoDevice
 {
     readonly ArduinoConnection _conn;
 
@@ -89,12 +89,14 @@ sealed class ArduinoDevice
     // EEPROM
     // -------------------------------------------------------------------------
 
-    public byte EepromRead(int addr)
+    // Null on no/garbled response -- never Unset, so a dropped read can't
+    // pass for an unconfigured byte.
+    public byte? EepromRead(int addr)
     {
         string? resp = Ask($"ER {addr:X2}");
         if (resp != null && byte.TryParse(resp, NumberStyles.HexNumber, null, out byte val))
             return val;
-        return Unset;
+        return null;
     }
 
     public bool EepromWrite(int addr, byte val) =>
@@ -216,144 +218,72 @@ sealed class ArduinoDevice
     };
 
     // -------------------------------------------------------------------------
-    // Board hardware table bulk transfer (HWU/HWD) — hardware.json
+    // Bulk transfer: HWU (hardware.json) and SCU (SystemConfig.json) share the
+    // same READY / line-OK / END-STORED handshake.
     // -------------------------------------------------------------------------
 
-    public bool HardwareConfigUploadStart()
+    // Null on success, else what failed.
+    string? BulkSend(string command, IEnumerable<string> lines)
     {
         _conn.StartCapture();
-        _conn.SendLine("HWU");
-        string? ack = _conn.GetCapturedLine(1500)?.Trim();
-        if (ack != "READY") { _conn.StopCapture(); return false; }
-        return true;
+        try
+        {
+            _conn.SendLine(command);
+            if (_conn.GetCapturedLine(1500)?.Trim() != "READY") return $"no READY after {command}";
+            foreach (string line in lines)
+            {
+                _conn.SendLine(line);
+                if (_conn.GetCapturedLine(1500)?.Trim() != "OK") return $"line '{line}' not accepted";
+            }
+            _conn.SendLine("END");
+            return _conn.GetCapturedLine(2000)?.Trim() == "STORED" ? null : "storage not confirmed";
+        }
+        finally { _conn.StopCapture(); }
     }
 
-    public bool HardwareConfigSendLine(string line)
-    {
-        _conn.SendLine(line);
-        return _conn.GetCapturedLine(1500)?.Trim() == "OK";
-    }
+    public string? HardwareConfigSend(IEnumerable<HardwareConfig.ResolvedChip> chips) =>
+        BulkSend("HWU", chips.Select(c => $"{c.VAddr:X2} {c.IodirA:X2} {c.IodirB:X2} {c.GppuA:X2} {c.GppuB:X2}"));
 
-    public bool HardwareConfigUploadFinish()
+    // Board hardware table rows (HWD). Lines that don't parse are skipped,
+    // so serial noise can't crash a download. Null on timeout.
+    public List<HardwareConfig.ResolvedChip>? HardwareConfigDownload()
     {
-        _conn.SendLine("END");
-        bool result = _conn.GetCapturedLine(2000)?.Trim() == "STORED";
-        _conn.StopCapture();
-        return result;
-    }
-
-    public void HardwareConfigUploadAbort() => _conn.StopCapture();
-
-    public bool HardwareConfigDownloadStart()
-    {
+        var rows = new List<HardwareConfig.ResolvedChip>();
         _conn.StartCapture();
-        _conn.SendLine("HWD");
-        return true;
-    }
-
-    public string? GetNextHardwareLine(int timeoutMs = 2000) =>
-        _conn.GetCapturedLine(timeoutMs)?.Trim();
-
-    public void HardwareConfigDownloadFinish() => _conn.StopCapture();
-
-    // -------------------------------------------------------------------------
-    // System-config bulk transfer (SCU/SCD) — SystemConfig.json
-    // -------------------------------------------------------------------------
-
-    public bool SystemConfigUploadStart()
-    {
-        _conn.StartCapture();
-        _conn.SendLine("SCU");
-        string? ack = _conn.GetCapturedLine(1500)?.Trim();
-        if (ack != "READY") { _conn.StopCapture(); return false; }
-        return true;
-    }
-
-    public bool SystemConfigSendLine(string line)
-    {
-        _conn.SendLine(line);
-        return _conn.GetCapturedLine(1500)?.Trim() == "OK";
-    }
-
-    public bool SystemConfigUploadFinish()
-    {
-        _conn.SendLine("END");
-        bool result = _conn.GetCapturedLine(2000)?.Trim() == "STORED";
-        _conn.StopCapture();
-        return result;
-    }
-
-    public void SystemConfigUploadAbort() => _conn.StopCapture();
-
-    // Sends a batch of SCU lines in one session. False (session aborted) on
-    // the first line the firmware doesn't OK.
-    public bool SystemConfigSend(IEnumerable<string> lines)
-    {
-        if (!SystemConfigUploadStart()) return false;
-        foreach (string line in lines)
+        try
         {
-            if (SystemConfigSendLine(line)) continue;
-            SystemConfigUploadAbort();
-            return false;
+            _conn.SendLine("HWD");
+            while (true)
+            {
+                string? line = _conn.GetCapturedLine(2000)?.Trim();
+                if (line == null) return null;
+                if (line == "END") return rows;
+                var b = line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                    .Select(p => byte.TryParse(p, NumberStyles.HexNumber, null, out byte v) ? v : (byte?)null)
+                    .ToArray();
+                if (b.Length == 5 && b.All(v => v != null))
+                    rows.Add(new HardwareConfig.ResolvedChip(b[0]!.Value, b[1]!.Value, b[2]!.Value, b[3]!.Value, b[4]!.Value));
+            }
         }
-        return SystemConfigUploadFinish();
+        finally { _conn.StopCapture(); }
     }
 
-    // Declares one board's status LED (vaddr + bit) via a single-line SCU
-    // session. Firmware resolves which EEPROM slot that is itself via
-    // board_find_slot(vaddr) -- the board must already be in the hardware
-    // table (hardware.json uploaded) or this fails.
-    public bool SetStatusLed(byte vaddr, int bit)
-    {
-        if (!SystemConfigUploadStart()) return false;
-        if (!SystemConfigSendLine($"L {vaddr:X2} {bit:X2}"))
-        {
-            SystemConfigUploadAbort();
-            return false;
-        }
-        return SystemConfigUploadFinish();
-    }
+    public string? SystemConfigSend(IEnumerable<string> lines) => BulkSend("SCU", lines);
 
-    // Declares one board's signal lamp group (Red/Green1/Green2 bits) via a
-    // single-line SCU session. Same board_find_slot() resolution as
-    // SetStatusLed.
-    public bool SetSignal(byte vaddr, int redBit, int green1Bit, int green2Bit)
-    {
-        if (!SystemConfigUploadStart()) return false;
-        if (!SystemConfigSendLine($"G {vaddr:X2} {redBit:X2} {green1Bit:X2} {green2Bit:X2}"))
-        {
-            SystemConfigUploadAbort();
-            return false;
-        }
-        return SystemConfigUploadFinish();
-    }
+    // Single-line SCU sessions declaring one board fact. Firmware resolves
+    // the EEPROM slot itself via board_find_slot(vaddr) -- the board must
+    // already be in the hardware table (hardware.json uploaded) or these fail.
+    public bool SetStatusLed(byte vaddr, int bit) =>
+        SystemConfigSend([$"L {vaddr:X2} {bit:X2}"]) == null;
 
-    // Declares one board's inverter-enable pin (port + bit) via a
-    // single-line SCU session. Same board_find_slot() resolution as
-    // SetStatusLed/SetSignal.
-    public bool SetInverterEnable(byte vaddr, char port, int bit)
-    {
-        if (!SystemConfigUploadStart()) return false;
-        if (!SystemConfigSendLine($"V {vaddr:X2} {port} {bit:X2}"))
-        {
-            SystemConfigUploadAbort();
-            return false;
-        }
-        return SystemConfigUploadFinish();
-    }
+    public bool SetSignal(byte vaddr, int redBit, int green1Bit, int green2Bit) =>
+        SystemConfigSend([$"G {vaddr:X2} {redBit:X2} {green1Bit:X2} {green2Bit:X2}"]) == null;
 
-    // Declares one board's track detection input (bit + active level) via a
-    // single-line SCU session. Same board_find_slot() resolution as above.
-    public bool SetTrackDetection(byte vaddr, int bit, bool activeHigh)
-    {
-        if (!SystemConfigUploadStart()) return false;
-        if (!SystemConfigSendLine($"T {vaddr:X2} {bit:X2} {(activeHigh ? 1 : 0):X2}"))
-        {
-            SystemConfigUploadAbort();
-            return false;
-        }
-        return SystemConfigUploadFinish();
-    }
+    public bool SetInverterEnable(byte vaddr, char port, int bit) =>
+        SystemConfigSend([$"V {vaddr:X2} {port} {bit:X2}"]) == null;
+
+    public bool SetTrackDetection(byte vaddr, int bit, bool activeHigh) =>
+        SystemConfigSend([$"T {vaddr:X2} {bit:X2} {(activeHigh ? 1 : 0):X2}"]) == null;
 
     // Whole SCD dump as lines (without the END marker). Null on timeout.
     public List<string>? SystemConfigDownload()

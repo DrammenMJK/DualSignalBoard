@@ -57,6 +57,11 @@ sealed class PanelLedEntry
     [JsonPropertyName("bit")] public int? Bit { get; set; }
     [JsonPropertyName("target")] public string? Target { get; set; }
     [JsonPropertyName("role")] public string? Role { get; set; }
+
+    // Entry number in the board's LED table, from the download. Not the list
+    // position: the download skips entries it can't map, which shifts later
+    // ones. Null for LEDs not read from the board (then position = index).
+    [JsonIgnore] public int? Index { get; set; }
 }
 
 sealed class SignalEntry

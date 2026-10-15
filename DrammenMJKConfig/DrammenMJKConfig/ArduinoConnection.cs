@@ -9,7 +9,7 @@ sealed class ArduinoConnection : IDisposable
     private Thread? _readThread;
     private volatile bool _running;
     private volatile bool _capturing;
-    private readonly ConcurrentQueue<string> _captureQueue = new();
+    private readonly BlockingCollection<string> _captureQueue = new();
 
     public ArduinoConnection(string portName, int baudRate = 115200)
     {
@@ -32,8 +32,6 @@ sealed class ArduinoConnection : IDisposable
         };
         _readThread.Start();
     }
-
-    public void Send(char c) { if (EnsureOpen()) _port.Write(c.ToString()); }
 
     // A dropped write (port gone) is treated like no response -- callers
     // already handle a null reply -- instead of crashing the whole tool.
@@ -73,7 +71,7 @@ sealed class ArduinoConnection : IDisposable
     // Use before binary/structured exchanges; call StopCapture when done.
     public void StartCapture()
     {
-        while (_captureQueue.TryDequeue(out _)) { } // flush stale data
+        while (_captureQueue.TryTake(out _)) { } // flush stale data
         _capturing = true;
     }
 
@@ -81,17 +79,8 @@ sealed class ArduinoConnection : IDisposable
 
     // Wait up to timeoutMs for the next line captured from Arduino.
     // Returns null on timeout.
-    public string? GetCapturedLine(int timeoutMs = 2000)
-    {
-        var deadline = DateTime.UtcNow.AddMilliseconds(timeoutMs);
-        while (DateTime.UtcNow < deadline)
-        {
-            if (_captureQueue.TryDequeue(out string? line))
-                return line;
-            Thread.Sleep(10);
-        }
-        return null;
-    }
+    public string? GetCapturedLine(int timeoutMs = 2000) =>
+        _captureQueue.TryTake(out string? line, timeoutMs) ? line : null;
 
     private void ReadLoop()
     {
@@ -103,7 +92,7 @@ sealed class ArduinoConnection : IDisposable
                 if (line.StartsWith('!'))
                     Console.WriteLine($"\r{line.Substring(1)}");  // status: strip '!', print as plain text
                 else if (_capturing)
-                    _captureQueue.Enqueue(line);                  // protocol response: queue for caller
+                    _captureQueue.Add(line);                      // protocol response: queue for caller
                 else
                     Console.WriteLine($"\r[A] {line}");           // relay mode: label as Arduino output
             }
@@ -129,5 +118,6 @@ sealed class ArduinoConnection : IDisposable
         _readThread?.Join(1000);
         try { _port.Close(); } catch { }
         _port.Dispose();
+        _captureQueue.Dispose();
     }
 }
