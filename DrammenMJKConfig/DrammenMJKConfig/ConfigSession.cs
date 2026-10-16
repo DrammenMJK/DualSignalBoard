@@ -550,7 +550,7 @@ sealed class ConfigSession(IArduinoDevice arduino)
         Console.WriteLine("--- Verify EEPROM (read-only) ---");
         var chips = arduino.HardwareConfigDownload();
         var lines = arduino.SystemConfigDownload();
-        if (chips == null || lines == null) { Console.WriteLine("Timeout reading EEPROM from the Arduino."); Console.WriteLine(); return; }
+        if (chips == null || lines == null) { Console.WriteLine("Timeout or unreadable reply reading EEPROM from the Arduino."); Console.WriteLine(); return; }
 
         var problems = EepromCheck.Problems(chips, lines);
         foreach (string p in problems) Console.WriteLine($"  {p}");

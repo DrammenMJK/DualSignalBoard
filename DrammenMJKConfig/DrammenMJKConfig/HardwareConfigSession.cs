@@ -79,7 +79,7 @@ sealed class HardwareConfigSession(IArduinoDevice arduino)
         }
 
         var rows = arduino.HardwareConfigDownload();
-        if (rows == null) { Console.WriteLine("Timeout waiting for device."); return; }
+        if (rows == null) { Console.WriteLine("Timeout or unreadable row from device — hardware.json left unchanged."); return; }
 
         Console.WriteLine($"Downloaded {rows.Count} chip(s) from the device.");
 

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -51,7 +52,18 @@ static class HardwareConfig
         File.WriteAllText(path, JsonSerializer.Serialize(file, WriteOptions));
 
     // One chip's register row, exactly what HWU sends and HWD returns.
-    public readonly record struct ResolvedChip(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB);
+    public readonly record struct ResolvedChip(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB)
+    {
+        // One HWD row, "VV AA BB CC DD" in hex. Null if it isn't exactly that.
+        public static ResolvedChip? Parse(string line)
+        {
+            var b = line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
+                .Select(p => byte.TryParse(p, NumberStyles.HexNumber, null, out byte v) ? v : (byte?)null)
+                .ToArray();
+            if (b.Length != 5 || b.Any(v => v == null)) return null;
+            return new ResolvedChip(b[0]!.Value, b[1]!.Value, b[2]!.Value, b[3]!.Value, b[4]!.Value);
+        }
+    }
 
     // Flattens every board's every chip into resolved register rows. Returns
     // null (with `error` set) if any chip still has a "tbd" entry -- a chip

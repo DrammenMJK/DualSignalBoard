@@ -42,7 +42,7 @@ sealed class StatusSession(IArduinoDevice arduino, SwitchTable switchTable)
         Console.WriteLine("--- Board hardware table ---");
 
         var rows = arduino.HardwareConfigDownload();
-        if (rows == null) { Console.WriteLine("  Timeout waiting for device."); return 0; }
+        if (rows == null) { Console.WriteLine("  Timeout or unreadable row from device."); return 0; }
 
         if (rows.Count == 0)
         {

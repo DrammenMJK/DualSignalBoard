@@ -244,11 +244,13 @@ sealed class ArduinoDevice : IArduinoDevice
     public string? HardwareConfigSend(IEnumerable<HardwareConfig.ResolvedChip> chips) =>
         BulkSend("HWU", chips.Select(c => $"{c.VAddr:X2} {c.IodirA:X2} {c.IodirB:X2} {c.GppuA:X2} {c.GppuB:X2}"));
 
-    // Board hardware table rows (HWD). Lines that don't parse are skipped,
-    // so serial noise can't crash a download. Null on timeout.
+    // Board hardware table rows (HWD). Null on timeout or if any row doesn't
+    // parse -- a partial table must never pass for the whole one. Reads on
+    // to END either way so leftover rows can't leak into the next command.
     public List<HardwareConfig.ResolvedChip>? HardwareConfigDownload()
     {
         var rows = new List<HardwareConfig.ResolvedChip>();
+        bool bad = false;
         _conn.StartCapture();
         try
         {
@@ -257,12 +259,9 @@ sealed class ArduinoDevice : IArduinoDevice
             {
                 string? line = _conn.GetCapturedLine(2000)?.Trim();
                 if (line == null) return null;
-                if (line == "END") return rows;
-                var b = line.Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Select(p => byte.TryParse(p, NumberStyles.HexNumber, null, out byte v) ? v : (byte?)null)
-                    .ToArray();
-                if (b.Length == 5 && b.All(v => v != null))
-                    rows.Add(new HardwareConfig.ResolvedChip(b[0]!.Value, b[1]!.Value, b[2]!.Value, b[3]!.Value, b[4]!.Value));
+                if (line == "END") return bad ? null : rows;
+                if (HardwareConfig.ResolvedChip.Parse(line) is { } chip) rows.Add(chip);
+                else bad = true;
             }
         }
         finally { _conn.StopCapture(); }

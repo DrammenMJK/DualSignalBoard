@@ -137,4 +137,20 @@ public class HardwareConfigTests
         }
         finally { File.Delete(path); }
     }
+
+    [Test]
+    public void ResolvedChipParse_ValidRow_ReturnsTheChip()
+    {
+        Assert.That(HardwareConfig.ResolvedChip.Parse("40 7F 00 FF 00"),
+            Is.EqualTo(new HardwareConfig.ResolvedChip(0x40, 0x7F, 0x00, 0xFF, 0x00)));
+    }
+
+    [TestCase("40 7F 00 ZZ 00")]
+    [TestCase("40 7F 00 FF")]
+    [TestCase("40 7F 00 FF 00 00")]
+    [TestCase("")]
+    public void ResolvedChipParse_MalformedRow_ReturnsNull(string line)
+    {
+        Assert.That(HardwareConfig.ResolvedChip.Parse(line), Is.Null);
+    }
 }
