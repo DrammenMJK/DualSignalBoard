@@ -90,4 +90,16 @@ public class PanelConfigJsonTests
         Assert.That(file.PanelLeds[0].Target, Is.EqualTo("1"));
         Assert.That(file.PanelLeds[0].Role, Is.EqualTo("avvik"));
     }
+
+    [Test]
+    public void ApplyDownloadLines_SkippedQLine_LaterLedsKeepTheirBoardIndex()
+    {
+        var file = new SystemConfigFile();
+
+        // Entry 1 targets slot 0x1F, which no pens has -- it's skipped.
+        SystemConfigJson.ApplyDownloadLines(file, ["Q 0 20 B 01 00 01", "Q 1 20 B 02 1F 00", "Q 2 20 B 03 01 00"]);
+
+        Assert.That(file.PanelLeds.Select(l => l.Index), Is.EqualTo(new int?[] { 0, 2 }));
+        Assert.That(SystemConfigJson.LedLine(file.PanelLeds[1].Index!.Value, file.PanelLeds[1]), Does.StartWith("Q 2 "));
+    }
 }

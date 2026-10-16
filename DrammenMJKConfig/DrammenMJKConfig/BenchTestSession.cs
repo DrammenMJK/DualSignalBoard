@@ -5,9 +5,9 @@ namespace DrammenMJKConfig;
 // via ArduinoDevice's Mcp* wrappers (the same primitives Motor Scan uses
 // internally); nothing here touches EEPROM or hardware.json. Useful for
 // checking new wiring before it's declared anywhere.
-static class BenchTestSession
+sealed class BenchTestSession(IArduinoDevice arduino)
 {
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("--- Bench test (raw MCP23017 access) ---");
@@ -16,15 +16,15 @@ static class BenchTestSession
 
         new Menu(
             [
-                ('P', "Probe a chip (is it on the bus?)",   () => Probe(arduino)),
-                ('W', "Sweep 0x20-0x27 (all MCP23017 addrs)", () => SweepAddresses(arduino)),
-                ('R', "Read a port (continuous, prints on change)", () => ReadPort(arduino)),
-                ('D', "Read/set a port's direction (IODIR)", () => SetDirection(arduino)),
-                ('U', "Read/set a port's pull-ups (GPPU)",   () => SetPullup(arduino)),
-                ('S', "Toggle a single output bit",         () => ToggleBit(arduino)),
-                ('F', "Flip all bits on a port",            () => FlipPort(arduino)),
-                ('T', "Generate traffic (for scope/logic analyzer)", () => GenerateTraffic(arduino)),
-                ('I', "I2C bus diagnostic (SDA/SCL stuck/floating check)", () => I2CDiag(arduino)),
+                ('P', "Probe a chip (is it on the bus?)",   Probe),
+                ('W', "Sweep 0x20-0x27 (all MCP23017 addrs)", SweepAddresses),
+                ('R', "Read a port (continuous, prints on change)", ReadPort),
+                ('D', "Read/set a port's direction (IODIR)", SetDirection),
+                ('U', "Read/set a port's pull-ups (GPPU)",   SetPullup),
+                ('S', "Toggle a single output bit",         ToggleBit),
+                ('F', "Flip all bits on a port",            FlipPort),
+                ('T', "Generate traffic (for scope/logic analyzer)", GenerateTraffic),
+                ('I', "I2C bus diagnostic (SDA/SCL stuck/floating check)", I2CDiag),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -52,7 +52,7 @@ static class BenchTestSession
         return false;
     }
 
-    static void Probe(ArduinoDevice arduino)
+    void Probe()
     {
         Console.WriteLine();
         if (!TryPromptByte("Virtual address", out byte vaddr)) return;
@@ -68,7 +68,7 @@ static class BenchTestSession
         Console.WriteLine();
     }
 
-    static void SweepAddresses(ArduinoDevice arduino)
+    void SweepAddresses()
     {
         Console.WriteLine();
         Console.WriteLine("Sweeping 0x20-0x27 (every address an MCP23017 can be strapped to)...");
@@ -96,7 +96,7 @@ static class BenchTestSession
     // catch mains-hum-driven noise on a floating wire, which a quick
     // snapshot would miss. See ArduinoDevice.I2CDiagnostic for the detail.
     // Takes ~2s to run (firmware-side).
-    static void I2CDiag(ArduinoDevice arduino)
+    void I2CDiag()
     {
         Console.WriteLine();
         Console.WriteLine("Checks SDA/SCL as plain GPIO (TWI briefly detached) -- for a bus that worked");
@@ -168,7 +168,7 @@ static class BenchTestSession
         }
     }
 
-    static void GenerateTraffic(ArduinoDevice arduino)
+    void GenerateTraffic()
     {
         Console.WriteLine();
         Console.WriteLine("Every attempt clocks out address+R/W on SCL/SDA regardless of whether");
@@ -193,7 +193,7 @@ static class BenchTestSession
         Console.WriteLine();
     }
 
-    static void FlipPort(ArduinoDevice arduino)
+    void FlipPort()
     {
         Console.WriteLine();
         Console.WriteLine("Inverts the whole port's output latch once (0xFF<->0x00 per bit) --");
@@ -228,7 +228,7 @@ static class BenchTestSession
     static void PrintBitHeader() =>
         Console.WriteLine($"  {"",-6}       {string.Join("", Enumerable.Range(0, 8).Reverse().Select(i => $"b{i}".PadLeft(4)))}");
 
-    static void ReadPort(ArduinoDevice arduino)
+    void ReadPort()
     {
         Console.WriteLine();
         if (!TryPromptByte("Virtual address", out byte vaddr)) return;
@@ -257,16 +257,16 @@ static class BenchTestSession
         Console.WriteLine();
     }
 
-    static void SetDirection(ArduinoDevice arduino) =>
-        ReadSetMask(arduino, "IODIR", "bit 1 = input, 0 = output", IodirReg, b => b ? "in" : "out", arduino.McpSetDirection);
+    void SetDirection() =>
+        ReadSetMask("IODIR", "bit 1 = input, 0 = output", IodirReg, b => b ? "in" : "out", arduino.McpSetDirection);
 
     // Only has an effect on bits configured as inputs (~100k internal pull-up).
-    static void SetPullup(ArduinoDevice arduino) =>
-        ReadSetMask(arduino, "GPPU", "bit 1 = pull-up on, 0 = off; inputs only", port => port == 'A' ? (byte)0x0C : (byte)0x0D,
+    void SetPullup() =>
+        ReadSetMask("GPPU", "bit 1 = pull-up on, 0 = off; inputs only", port => port == 'A' ? (byte)0x0C : (byte)0x0D,
             b => b ? "on" : "-", arduino.McpSetPullup);
 
     // Shared read-show-then-optionally-write flow for a per-port mask register.
-    static void ReadSetMask(ArduinoDevice arduino, string reg, string legend, Func<char, byte> regAddr,
+    void ReadSetMask(string reg, string legend, Func<char, byte> regAddr,
         Func<bool, string> labels, Func<byte, char, byte, bool> write)
     {
         Console.WriteLine();
@@ -299,7 +299,7 @@ static class BenchTestSession
     // level, which for an output driving a load can read back differently from
     // what was written. MBIT also forces the bit to output, so this works on
     // a bit that's currently configured as input.
-    static void ToggleBit(ArduinoDevice arduino)
+    void ToggleBit()
     {
         Console.WriteLine();
         if (!TryPromptByte("Virtual address", out byte vaddr)) return;

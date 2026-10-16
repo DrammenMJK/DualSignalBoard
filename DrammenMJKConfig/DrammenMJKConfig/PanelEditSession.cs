@@ -8,23 +8,23 @@ namespace DrammenMJKConfig;
 // scan. Every edit starts from what the Arduino holds (EEPROM is the source
 // of truth), changes it in memory, sends ONLY the entries it changed back to
 // the Arduino, and mirrors the panel tables into SystemConfig.json.
-static class PanelEditSession
+sealed class PanelEditSession(PanelScanSession panelScan)
 {
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("--- Edit panel config (SVB inputs and LEDs) ---");
-        Show(arduino);
+        Show();
 
         new Menu(
             [
-                ('T', "Show table",                                              () => Show(arduino)),
-                ('P', "Swap Rett/Avvik for one panel switch (misjudged R/A)",    () => Edit(arduino, SwapSwitchPolarity)),
-                ('S', "Swap two panel switches (mislabeled switch)",             () => Edit(arduino, SwapSwitches)),
-                ('D', "Swap dreieskive CW/CCW",                                  () => Edit(arduino, SwapDreieskive)),
-                ('L', "Reassign one LED (or remove it)",                         () => Edit(arduino, ReassignLed)),
-                ('R', "Swap Rett/Avvik LEDs for one pens",                       () => Edit(arduino, SwapLedRoles)),
-                ('X', "Remove one panel input",                                  () => Edit(arduino, RemoveInput)),
+                ('T', "Show table",                                              Show),
+                ('P', "Swap Rett/Avvik for one panel switch (misjudged R/A)",    () => Edit(SwapSwitchPolarity)),
+                ('S', "Swap two panel switches (mislabeled switch)",             () => Edit(SwapSwitches)),
+                ('D', "Swap dreieskive CW/CCW",                                  () => Edit(SwapDreieskive)),
+                ('L', "Reassign one LED (or remove it)",                         () => Edit(ReassignLed)),
+                ('R', "Swap Rett/Avvik LEDs for one pens",                       () => Edit(SwapLedRoles)),
+                ('X', "Remove one panel input",                                  () => Edit(RemoveInput)),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -35,26 +35,18 @@ static class PanelEditSession
     // Read -> edit -> write back -> show. `edit` returns the SCU lines for
     // exactly the entries it changed (null = cancelled/nothing changed), so a
     // single fix never rewrites or clears the rest of the panel tables.
-    static void Edit(ArduinoDevice arduino, Func<SystemConfigFile, List<string>?> edit)
+    void Edit(Func<SystemConfigFile, List<string>?> edit)
     {
         Console.WriteLine();
-        if (PanelScanSession.ReadPanel(arduino) is not { } panel) return;
+        if (panelScan.ReadPanel() is not { } panel) return;
         if (edit(panel) is not { Count: > 0 } lines) return;
-
-        var file = SystemConfigSession.LoadOrNew();
-        file.SvbSwitches = panel.SvbSwitches;
-        file.PanelLeds = panel.PanelLeds;
-        SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
-
-        Console.WriteLine(arduino.SystemConfigSend(lines)
-            ? "  Stored (SystemConfig.json + Arduino)."
-            : "  Saved to SystemConfig.json, but the Arduino upload failed -- restore later with Config -> J.");
+        panelScan.Store(panel, lines);
         Print(panel);
     }
 
-    static void Show(ArduinoDevice arduino)
+    void Show()
     {
-        if (PanelScanSession.ReadPanel(arduino) is { } panel) Print(panel);
+        if (panelScan.ReadPanel() is { } panel) Print(panel);
     }
 
     static void Print(SystemConfigFile panel)
@@ -64,9 +56,7 @@ static class PanelEditSession
         foreach (string key in SystemConfigJson.SvbSwitchLabelOrder().OfType<string>())
         {
             if (!panel.SvbSwitches.TryGetValue(key, out var e)) { Console.WriteLine($"    {key,-10} -"); continue; }
-            Console.WriteLine(key == SystemConfigJson.Dreieskive
-                ? $"    {key,-10} {e.VAddr} {e.Port}  CW=bit{e.BitCw?.ToString() ?? "?"}  CCW=bit{e.BitCcw?.ToString() ?? "?"}"
-                : $"    {key,-10} {e.VAddr} {e.Port}{e.Bit}" + (e.Polarity is int p ? $"  Rett = {(p == 1 ? "High" : "Low")}" : ""));
+            Console.WriteLine("    " + PanelScanSession.FormatInput(key, e));
         }
         Console.WriteLine("  Panel LEDs:");
         if (panel.PanelLeds.Count == 0) Console.WriteLine("    -");
@@ -130,19 +120,16 @@ static class PanelEditSession
         var led = panel.PanelLeds[n - 1];
         Console.WriteLine($"  {led.VAddr} {led.Port}{led.Bit} is now {led.Target} {led.Role}.");
         if (!PanelScanSession.AskLedTarget(out string? target, out string? role)) return null;
+        int index = led.Index ?? n - 1;
         if (target != null)
         {
             led.Target = target; led.Role = role;
-            return [SystemConfigJson.LedLine(n - 1, led)];
+            return [SystemConfigJson.LedLine(index, led)];
         }
-        // Removing shifts the later entries down one place: resend those
-        // and mark the now-unused last entry free.
+        // Free just this entry on the board; the others keep their places.
         panel.PanelLeds.RemoveAt(n - 1);
         Console.WriteLine("  Removed.");
-        var lines = Enumerable.Range(n - 1, panel.PanelLeds.Count - (n - 1))
-            .Select(i => SystemConfigJson.LedLine(i, panel.PanelLeds[i])).ToList();
-        lines.Add(SystemConfigJson.ClearLedLine(panel.PanelLeds.Count));
-        return lines;
+        return [SystemConfigJson.ClearLedLine(index)];
     }
 
     static List<string>? SwapLedRoles(SystemConfigFile panel)
@@ -154,7 +141,7 @@ static class PanelEditSession
             var led = panel.PanelLeds[i];
             if (led.Target != label) continue;
             led.Role = led.Role == "rett" ? "avvik" : "rett";
-            lines.Add(SystemConfigJson.LedLine(i, led));
+            lines.Add(SystemConfigJson.LedLine(led.Index ?? i, led));
         }
         Console.WriteLine($"  {label}: Rett and Avvik LEDs swapped.");
         return lines;

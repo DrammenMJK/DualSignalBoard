@@ -9,30 +9,17 @@ public class StatusSessionIntegrationTests
         var (conn, device) = ArduinoTestHelper.Connect();
         using (conn)
         {
-            Assert.DoesNotThrow(() => StatusSession.Run(device));
+            Assert.DoesNotThrow(() => new StatusSession(device, new SwitchTable(device)).Run());
         }
     }
 
     [Test]
-    public void HardwareConfigDownload_ReturnsWellFormedLines()
+    public void HardwareConfigDownload_ReturnsRows()
     {
         var (conn, device) = ArduinoTestHelper.Connect();
         using (conn)
         {
-            device.HardwareConfigDownloadStart();
-            try
-            {
-                while (true)
-                {
-                    string? line = device.GetNextHardwareLine(2000);
-                    Assert.That(line, Is.Not.Null, "Device timed out mid-download (HWD never sent END).");
-                    if (line == "END") break;
-
-                    var parts = line!.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                    Assert.That(parts, Has.Length.EqualTo(5), $"Malformed HWD line: '{line}'");
-                }
-            }
-            finally { device.HardwareConfigDownloadFinish(); }
+            Assert.That(device.HardwareConfigDownload(), Is.Not.Null, "Device timed out mid-download (HWD never sent END).");
         }
     }
 

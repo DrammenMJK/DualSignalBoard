@@ -4,15 +4,15 @@ namespace DrammenMJKConfig;
 // "Visibility & Making It Work", part (a). Reuses HWD/SCD (same as
 // HardwareConfigSession/SystemConfigSession downloads) but only prints;
 // never touches hardware.json/SystemConfig.json.
-static class StatusSession
+sealed class StatusSession(IArduinoDevice arduino, SwitchTable switchTable)
 {
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("=== Status: EEPROM summary ===");
 
-        int chipCount = PrintBoardHardwareTable(arduino);
-        var (switchCount, totalSwitches) = PrintSystemConfig(arduino);
+        int chipCount = PrintBoardHardwareTable();
+        var (switchCount, totalSwitches) = PrintSystemConfig();
         PrintMode(chipCount, switchCount, totalSwitches);
 
         Console.WriteLine();
@@ -36,32 +36,13 @@ static class StatusSession
         Console.WriteLine($"  {mode}");
     }
 
-    static int PrintBoardHardwareTable(ArduinoDevice arduino)
+    int PrintBoardHardwareTable()
     {
         Console.WriteLine();
         Console.WriteLine("--- Board hardware table ---");
 
-        var rows = new List<(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB)>();
-        arduino.HardwareConfigDownloadStart();
-        try
-        {
-            while (true)
-            {
-                string? line = arduino.GetNextHardwareLine(2000);
-                if (line == null) { Console.WriteLine("  Timeout waiting for device."); return 0; }
-                if (line == "END") break;
-
-                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 5) continue;
-                rows.Add((
-                    Convert.ToByte(parts[0], 16),
-                    Convert.ToByte(parts[1], 16),
-                    Convert.ToByte(parts[2], 16),
-                    Convert.ToByte(parts[3], 16),
-                    Convert.ToByte(parts[4], 16)));
-            }
-        }
-        finally { arduino.HardwareConfigDownloadFinish(); }
+        var rows = arduino.HardwareConfigDownload();
+        if (rows == null) { Console.WriteLine("  Timeout or unreadable row from device."); return 0; }
 
         if (rows.Count == 0)
         {
@@ -82,7 +63,7 @@ static class StatusSession
         return rows.Count;
     }
 
-    static (int SwitchCount, int TotalSwitches) PrintSystemConfig(ArduinoDevice arduino)
+    (int SwitchCount, int TotalSwitches) PrintSystemConfig()
     {
         Console.WriteLine();
         Console.WriteLine("--- Switches / dreieskive / status LED / fade config ---");
@@ -96,7 +77,7 @@ static class StatusSession
         SystemConfigJson.ApplyDownloadLines(file, lines);
 
         Console.WriteLine($"  Switches: {file.Switches.Count}/{allLabels.Count} configured");
-        SwitchTable.Print(arduino);
+        switchTable.Print();
 
         Console.WriteLine(file.Dreieskive.MotorVAddr != null
             ? $"  Dreieskive: motor={file.Dreieskive.MotorVAddr} pinBase={file.Dreieskive.MotorPinBase}" +

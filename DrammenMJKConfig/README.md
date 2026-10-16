@@ -8,7 +8,7 @@ in the Arduino's EEPROM and does not need to run during normal layout operation.
 
 ## Requirements
 
-- .NET 8 runtime
+- .NET 10 runtime
 - Arduino connected via USB (CH340 or genuine USB)
 - Baud rate: 115200
 
@@ -26,12 +26,15 @@ or
 dotnet run
 ```
 
-The program lists available COM ports. If only one is present it connects automatically;
-otherwise you are prompted to choose. After connecting it waits 2 seconds for the Arduino
-to finish its reset, then shows the main menu.
+The program first tries the COM port that worked last time, then probes every other port
+for an Arduino that answers `PING`/`SI`, and only asks you to choose if none does. Each
+attempt waits 2 seconds for the Arduino to finish its reset. All config files (`boards.json`,
+`hardware.json`, `SystemConfig.json`) live in `DrammenMJKConfig/DrammenMJKConfig`
+under the repo root, found from the `.git` folder -- wherever the clone is and
+wherever the tool is started from. Nothing is copied to `bin`.
 
 ```txt
-D = Debug mode    C = Config mode    V = Verify    Q = Quit
+C = Config mode    O = Operate    S = Status    Q = Quit
 ```
 
 ---

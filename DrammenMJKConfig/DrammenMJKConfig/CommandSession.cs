@@ -13,9 +13,9 @@ namespace DrammenMJKConfig;
 // write raw bits with McpSetBit. Input Test and Track Detection
 // are read-only live polls (McpReadPort) -- see RunInputTest/
 // RunTrackDetection. See PLAN_Phase1.md, Command mode.
-static class CommandSession
+sealed class CommandSession(IArduinoDevice arduino, DreieskiveSession dreieskive)
 {
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("=== Command Mode ===");
@@ -23,22 +23,11 @@ static class CommandSession
         Console.WriteLine("Esc = back.");
         Console.WriteLine();
 
-        var scbs = BoardConfig.Svb.Scbs;
-
-        while (true)
-        {
-            Console.WriteLine("Boards: " + string.Join("  ", scbs.Select((b, i) => $"{i + 1}={b.Name}")));
-            Console.Write("Select board (or Esc): ");
-
-            char boardChoice = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '9' && (ch - '1') < scbs.Count));
-            Console.WriteLine(boardChoice == EscKey ? "[Esc]" : boardChoice.ToString());
-            if (boardChoice == EscKey) { Console.WriteLine(); return; }
-
-            RunBoard(arduino, scbs[boardChoice - '1']);
-        }
+        while (PickScb() is { } scb)
+            RunBoard(scb);
     }
 
-    static void RunBoard(ArduinoDevice arduino, BoardScb scb)
+    void RunBoard(BoardScb scb)
     {
         while (true)
         {
@@ -61,15 +50,37 @@ static class CommandSession
 
             switch (input)
             {
-                case '1': RunMotors(arduino, scb); break;
-                case '2': RunSignals(arduino, scb); break;
-                case '3': RunStatusLight(arduino, scb); break;
-                case '4': RunMotorPinTest(arduino, scb); break;
-                case '5': RunInputTest(arduino, scb); break;
-                case '6': RunTrackDetection(arduino, scb); break;
-                case '7': RunDreieskive(arduino, scb); break;
+                case '1': RunMotors(scb); break;
+                case '2': RunSignals(scb); break;
+                case '3': RunStatusLight(scb); break;
+                case '4': RunMotorPinTest(scb); break;
+                case '5': RunInputTest(scb); break;
+                case '6': RunTrackDetection(scb); break;
+                case '7': RunDreieskive(scb); break;
             }
         }
+    }
+
+    // Per motor: slot (null = not scanned) and where its driver bit is.
+    // Null if a slot's EEPROM read failed -- falling back to the declared pin
+    // then would drive another switch's motor.
+    internal (int? Slot, byte VAddr, int Bit, int? Polarity)[]? ResolveMotors(BoardScb scb)
+    {
+        int count = Math.Min(scb.Switches.Count, 9); // ponytail: single-key 1-9, no board has more yet
+        var motors = new (int? Slot, byte VAddr, int Bit, int? Polarity)[count];
+        for (int i = 0; i < count; i++)
+        {
+            if (!BoardConfig.TryFindSlotByLabel(scb.Switches[i].Label, out int slot))
+            {
+                motors[i] = (null, scb.VirtualAddress, scb.MotorBitFor(i), null);
+                continue;
+            }
+            if (SwitchSlotData.Read(arduino, slot) is not { } d) return null;
+            motors[i] = d.IsConfigured
+                ? (slot, d.MotorVAddr, d.MotorBit, d.Polarity)
+                : (null, scb.VirtualAddress, scb.MotorBitFor(i), null);
+        }
+        return motors;
     }
 
     // One key per motor (1, 2, 3...), no Enter: each press flips that motor's
@@ -80,19 +91,16 @@ static class CommandSession
     // bit, mapped to Rett/Avvik via the scanned polarity), "Feedback" is the
     // live end-position contacts (SR). Unscanned motors fall back to the
     // declared motor bit, shown raw as H/L, with no feedback mapping.
-    static void RunMotors(ArduinoDevice arduino, BoardScb scb)
+    void RunMotors(BoardScb scb)
     {
         const byte OlatB = 0x15;
-        int count = Math.Min(scb.Switches.Count, 9); // ponytail: single-key 1-9, no board has more yet
-
-        // Per motor: slot (null = not scanned) and where its driver bit is.
-        var motors = Enumerable.Range(0, count).Select(i =>
+        if (ResolveMotors(scb) is not { } motors)
         {
-            if (BoardConfig.TryFindSlotByLabel(scb.Switches[i].Label, out int slot)
-                && SwitchSlotData.Read(arduino, slot) is { IsConfigured: true } d)
-                return (Slot: (int?)slot, VAddr: d.MotorVAddr, Bit: (int)d.MotorBit, Polarity: (int?)d.Polarity);
-            return (Slot: (int?)null, VAddr: scb.VirtualAddress, Bit: scb.MotorBitFor(i), Polarity: (int?)null);
-        }).ToArray();
+            Console.WriteLine("  I2C error reading the switch slots from EEPROM — not driving any motor.");
+            Console.WriteLine();
+            return;
+        }
+        int count = motors.Length;
 
         // -1 = I2C error, else 0/1.
         int MotorLevel(int i)
@@ -161,7 +169,7 @@ static class CommandSession
     // every bit, so a pin that won't follow its command -- stale EEPROM,
     // wiring fault, dead inverter, I2C error -- is visible immediately.
     // Single keypress throughout (ReadChar), no Enter.
-    static void RunMotorPinTest(ArduinoDevice arduino, BoardScb scb)
+    void RunMotorPinTest(BoardScb scb)
     {
         byte vaddr = scb.VirtualAddress;
         bool hasEnable = scb.InverterEnablePin != null;
@@ -243,7 +251,7 @@ static class CommandSession
     // interval and redraws one line in place. Which bits are inputs is read
     // back from the chip's IODIR, not assumed. Any key stops it. For wiring
     // bring-up: short each feedback pin to GND and watch its bit flip H->L.
-    static void RunInputTest(ArduinoDevice arduino, BoardScb scb)
+    void RunInputTest(BoardScb scb)
     {
         byte vaddr = scb.VirtualAddress;
         const byte IodirA = 0x00, IodirB = 0x01;
@@ -305,7 +313,7 @@ static class CommandSession
     // SystemConfig.json's cwPolarity (Config D's result). The motor has no
     // feedback and never stops on its own, so it's always stopped on the way
     // out of this menu.
-    static void RunDreieskive(ArduinoDevice arduino, BoardScb scb)
+    void RunDreieskive(BoardScb scb)
     {
         if (scb.DreieskivePins is not { } pins) return;
         byte vaddr = scb.VirtualAddress;
@@ -336,9 +344,9 @@ static class CommandSession
 
                 bool ok = input switch
                 {
-                    '1' => DreieskiveSession.Drive(arduino, vaddr, onBit: cwBit, offBit: ccwBit),
-                    '2' => DreieskiveSession.Drive(arduino, vaddr, onBit: ccwBit, offBit: cwBit),
-                    _ => DreieskiveSession.Stop(arduino, vaddr, pins),
+                    '1' => dreieskive.Drive(vaddr, onBit: cwBit, offBit: ccwBit),
+                    '2' => dreieskive.Drive(vaddr, onBit: ccwBit, offBit: cwBit),
+                    _ => dreieskive.Stop(vaddr, pins),
                 };
                 string what = input switch { '1' => "Running clockwise", '2' => "Running counter-clockwise", _ => "Stopped" };
                 Console.WriteLine(ok ? $"  {what}." : "  I2C error — no response from the board.");
@@ -346,7 +354,7 @@ static class CommandSession
         }
         finally
         {
-            DreieskiveSession.Stop(arduino, vaddr, pins);
+            dreieskive.Stop(vaddr, pins);
         }
     }
 
@@ -355,7 +363,7 @@ static class CommandSession
     // 0.3s. Bit + polarity come from SystemConfig.json (Track Detection
     // Scan's result), not boards.json -- discovered, not declared, same as
     // RunSignals needing SystemConfig for its bits. Any key stops it.
-    static void RunTrackDetection(ArduinoDevice arduino, BoardScb scb)
+    void RunTrackDetection(BoardScb scb)
     {
         var file = SystemConfigSession.LoadOrNew();
         if (!file.TrackDetections.TryGetValue(scb.Name, out var td) || td.VAddr == null || td.Bit == null || td.ActiveHigh == null)
@@ -403,7 +411,7 @@ static class CommandSession
     // switch motor). Bit assignment comes from SystemConfig.json (Signal
     // Scan's result), not boards.json -- it was discovered, not declared.
     // Loops so repeated checks don't need re-entering this section each time.
-    static void RunSignals(ArduinoDevice arduino, BoardScb scb)
+    void RunSignals(BoardScb scb)
     {
         var file = SystemConfigSession.LoadOrNew();
         if (!file.Signals.TryGetValue(scb.Name, out var sig) || sig.VAddr == null)
@@ -452,7 +460,7 @@ static class CommandSession
     // Status LED's vaddr+port+bit come straight from boards.json
     // (scb.StatusLedPin) -- declared, not discovered, so no SystemConfig.json
     // lookup needed the way RunSignals needs one for Signal Scan's result.
-    static void RunStatusLight(ArduinoDevice arduino, BoardScb scb)
+    void RunStatusLight(BoardScb scb)
     {
         if (scb.StatusLedPin is not { } led)
         {
@@ -477,7 +485,7 @@ static class CommandSession
 
             if (input == '3')
             {
-                FlashStatusLight(arduino, scb, led, vaddr);
+                FlashStatusLight(scb, led, vaddr);
                 continue;
             }
 
@@ -495,7 +503,7 @@ static class CommandSession
     // bit. Active-low -- McpSetBit(..., false) drives it low = enabled.
     // Left enabled afterward (not restored) since that's normally what you
     // want before going on to test the rest of the board.
-    static void FlashStatusLight(ArduinoDevice arduino, BoardScb scb, (char Port, int Bit) led, byte vaddr)
+    void FlashStatusLight(BoardScb scb, (char Port, int Bit) led, byte vaddr)
     {
         if (scb.InverterEnablePin is { } en)
             arduino.McpSetBit(vaddr, en.Port, en.Bit, false);

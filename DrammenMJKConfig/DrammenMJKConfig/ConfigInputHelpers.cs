@@ -11,62 +11,31 @@ internal static class ConfigInputHelpers
         while (true) { char c = ReadKey(); if (valid(c)) return c; }
     }
 
-    // Console.ReadLine() can't observe Escape at all (it's line-buffered and
-    // Escape doesn't submit the line), so prompts built on it could only ever
-    // treat blank+Enter as "go back", not Esc. This reads key-by-key instead
-    // (same primitive as ReadChar), building up a string, so Esc and blank
-    // both mean the same thing everywhere: null, i.e. go back. Backspace
-    // edits normally; Enter submits.
-    internal static string? ReadLineOrEsc()
+    // Single-key choices for lists longer than 9: hexadecimal digits.
+    internal const string ZeroBasedKeys = "0123456789ABCDEF", OneBasedKeys = "123456789ABCDEFG";
+
+    // Index picked by key, or -1 on Esc.
+    internal static int ReadKeyIndex(int count, string keys = ZeroBasedKeys)
     {
-        var sb = new System.Text.StringBuilder();
-        while (true)
-        {
-            var key = Console.ReadKey(intercept: true);
-            if (key.Key == ConsoleKey.Escape) { Console.WriteLine("[Esc]"); return null; }
-            if (key.Key == ConsoleKey.Enter) { Console.WriteLine(); break; }
-            if (key.Key == ConsoleKey.Backspace)
-            {
-                if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); }
-                continue;
-            }
-            if (!char.IsControl(key.KeyChar))
-            {
-                sb.Append(key.KeyChar);
-                Console.Write(key.KeyChar);
-            }
-        }
-        string result = sb.ToString().Trim();
-        return result.Length == 0 ? null : result;
+        char c = char.ToUpper(ReadChar(ch => ch == EscKey || keys.IndexOf(char.ToUpper(ch)) is int i && i >= 0 && i < count));
+        Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
+        return c == EscKey ? -1 : keys.IndexOf(c);
     }
 
-    internal static string BuildRemaining(char first, char last, bool[] assigned)
+    // "Boards: 1=X  2=Y" prompt. Index of the chosen board, or -1 on Esc.
+    internal static int PickBoard(IEnumerable<string> names)
     {
-        var sb = new System.Text.StringBuilder("[");
-        bool any = false;
-        for (char k = first; k <= last; k++)
-        {
-            if (!assigned[k - first]) { if (any) sb.Append(','); sb.Append(k); any = true; }
-        }
-        sb.Append(']');
-        return any ? sb.ToString() : "[none]";
+        Console.WriteLine("Boards: " + string.Join("  ", names.Select((n, i) => $"{OneBasedKeys[i]}={n}")));
+        Console.Write("Select board (or Esc): ");
+        return ReadKeyIndex(names.Count(), OneBasedKeys);
     }
 
-    internal static string BuildRemainingLeds(int numLeds, bool[] usedLed)
+    // Board picker over this SVB's SCBs. Null on Esc.
+    internal static BoardScb? PickScb()
     {
-        var sb = new System.Text.StringBuilder("[");
-        bool any = false;
-        for (int i = 0; i < numLeds; i++)
-        {
-            if (!usedLed[i]) { if (any) sb.Append(','); sb.Append(i); any = true; }
-        }
-        sb.Append(']');
-        return any ? sb.ToString() : "[none]";
-    }
-
-    internal static bool AllTrue(bool[] arr)
-    {
-        foreach (bool b in arr) if (!b) return false;
-        return true;
+        var scbs = BoardConfig.Svb.Scbs;
+        int i = PickBoard(scbs.Select(b => b.Name));
+        if (i < 0) Console.WriteLine();
+        return i < 0 ? null : scbs[i];
     }
 }

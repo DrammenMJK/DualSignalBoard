@@ -156,7 +156,8 @@ static class SystemConfigJson
         return lines;
     }
 
-    // One LED table entry -- also used on its own for single-LED edits.
+    // One LED table entry -- also used on its own for single-LED edits
+    // (pass led.Index there, so the edit hits the board's own entry).
     public static string LedLine(int index, PanelLedEntry led)
     {
         byte target = (byte)(led.Target != SignalTarget && BoardConfig.TryFindSlotByLabel(led.Target ?? "", out int s) ? s : 0xFF);
@@ -167,8 +168,12 @@ static class SystemConfigJson
     // Marks one LED table entry unused on the board (vaddr FF).
     public static string ClearLedLine(int index) => $"Q {index} FF A 00 FF 00";
 
-    public static void ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
+    // Returns the lines that couldn't be parsed (wrong field count, bad hex,
+    // unknown record or LED role). Records for slots/boards boards.json doesn't know are
+    // ignored on purpose and not counted.
+    public static List<string> ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
     {
+        var unreadable = new List<string>();
         var slotToLabel = BoardConfig.AllSwitchSlots().ToDictionary(s => s.Slot, s => s.Label);
         var svbLabels = SvbSwitchLabelOrder();
         bool clearedLeds = false; // the board's LED table replaces the file's, not appends to it
@@ -220,13 +225,14 @@ static class SystemConfigJson
                     {
                         // Q <idx> <vaddr> <port> <bit> <targetSlot> <role>
                         int role = Convert.ToInt32(parts[6], 16);
-                        if (role >= LedRoles.Length) break;
+                        if (role < 0 || role >= LedRoles.Length) { unreadable.Add(line); break; }
                         string? target = parts[5] == "FF" ? SignalTarget
                             : slotToLabel.GetValueOrDefault(Convert.ToInt32(parts[5], 16));
                         if (target == null) break;
                         if (!clearedLeds) { file.PanelLeds.Clear(); clearedLeds = true; }
                         file.PanelLeds.Add(new PanelLedEntry
                         {
+                            Index = int.Parse(parts[1]),
                             VAddr = HexStr(parts[2]),
                             Port = parts[3],
                             Bit = Convert.ToInt32(parts[4], 16),
@@ -291,9 +297,13 @@ static class SystemConfigJson
                         };
                         break;
                     }
+                    default:
+                        unreadable.Add(line);
+                        break;
                 }
             }
-            catch (FormatException) { /* skip malformed line */ }
+            catch (Exception e) when (e is FormatException or OverflowException) { unreadable.Add(line); }
         }
+        return unreadable;
     }
 }

@@ -13,20 +13,9 @@ namespace DrammenMJKConfig;
 // hardware.json must have been uploaded for the panel board first. Results go
 // to SystemConfig.json (panelLeds / svbSwitches) and to the Arduino's EEPROM.
 // Storage only -- nothing drives the LEDs or acts on the inputs yet.
-static class PanelScanSession
+sealed class PanelScanSession(IArduinoDevice arduino)
 {
     const byte IodirA = 0x00, IodirB = 0x01;
-
-    // Single-key choices, hexadecimal 0-F -- 16 per list (per SCB / per
-    // SCB list), past the old 1-9 cap. Havna, the largest, has 11 pens.
-    const string Keys = "0123456789ABCDEF";
-
-    static int ReadKeyIndex(int count)
-    {
-        char c = char.ToUpper(ReadChar(ch => ch == EscKey || Keys.IndexOf(char.ToUpper(ch)) is int i && i >= 0 && i < count));
-        Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
-        return c == EscKey ? -1 : Keys.IndexOf(c);
-    }
 
     // Picks a pens in two steps -- SCB, then a pens on it -- so any number of
     // SCBs/pens fits, and a panel can drive LEDs for pens on another SVB's
@@ -44,18 +33,18 @@ static class PanelScanSession
         var scb = scbs[0];
         if (scbs.Count > 1)
         {
-            Console.Write("  SCB:  " + string.Join("  ", scbs.Select((g, i) => $"{Keys[i]}={g.Name}")) + "  (Esc = cancel): ");
+            Console.Write("  SCB:  " + string.Join("  ", scbs.Select((g, i) => $"{ZeroBasedKeys[i]}={g.Name}")) + "  (Esc = cancel): ");
             int i = ReadKeyIndex(scbs.Count);
             if (i < 0) return null;
             scb = scbs[i];
         }
-        Console.Write($"  Pens on {scb.Name}:  " + string.Join("  ", scb.Labels.Select((l, i) => $"{Keys[i]}={(mark ?? (x => x))(l)}")) + "  (Esc = cancel): ");
+        Console.Write($"  Pens on {scb.Name}:  " + string.Join("  ", scb.Labels.Select((l, i) => $"{ZeroBasedKeys[i]}={(mark ?? (x => x))(l)}")) + "  (Esc = cancel): ");
         int p = ReadKeyIndex(scb.Labels.Count);
         return p < 0 ? null : scb.Labels[p];
     }
 
     // Panel tables as the Arduino holds them (EEPROM is the source of truth).
-    internal static SystemConfigFile? ReadPanel(ArduinoDevice arduino)
+    internal SystemConfigFile? ReadPanel()
     {
         var lines = arduino.SystemConfigDownload();
         if (lines == null) { Console.WriteLine("  Timeout reading config from the Arduino."); return null; }
@@ -65,15 +54,16 @@ static class PanelScanSession
     }
 
     // Mirrors the panel tables into SystemConfig.json and sends `lines` to the Arduino.
-    internal static void Store(ArduinoDevice arduino, SystemConfigFile panel, List<string> lines)
+    internal void Store(SystemConfigFile panel, List<string> lines)
     {
         var file = SystemConfigSession.LoadOrNew();
         file.SvbSwitches = panel.SvbSwitches;
         file.PanelLeds = panel.PanelLeds;
         SystemConfigJson.Save(file, SystemConfigSession.DefaultPath);
-        Console.WriteLine(arduino.SystemConfigSend(lines)
-            ? "Stored (SystemConfig.json + Arduino)."
-            : "Saved to SystemConfig.json, but the Arduino upload failed -- restore later with Config -> J.");
+        string? error = arduino.SystemConfigSend(lines);
+        Console.WriteLine(error == null
+            ? "  Stored (SystemConfig.json + Arduino)."
+            : $"  Saved to SystemConfig.json, but the Arduino upload failed ({error}) -- restore later with Config -> J.");
     }
 
     // Asks what an LED is. False on Esc; target null = unused/nothing lit.
@@ -110,17 +100,13 @@ static class PanelScanSession
     {
         var boards = BoardConfig.PanelBoards;
         if (boards.Count == 0) { Console.WriteLine("  No SVB/Combined board in boards.json."); return null; }
-        Console.WriteLine("Panel boards: " + string.Join("  ", boards.Select((b, i) =>
-            $"{i + 1}={b.Name} ({string.Join(",", b.VAddrs.Select(v => $"0x{v:X2}"))})")));
-        Console.Write("Select board (or Esc): ");
-        char c = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '9' && ch - '1' < boards.Count));
-        Console.WriteLine(c == EscKey ? "[Esc]" : c.ToString());
-        return c == EscKey ? null : boards[c - '1'];
+        int i = PickBoard(boards.Select(b => $"{b.Name} ({string.Join(",", b.VAddrs.Select(v => $"0x{v:X2}"))})"));
+        return i < 0 ? null : boards[i];
     }
 
     // Every (vaddr, port, bit) whose IODIR bit equals `wantInput`. Null if a
     // chip doesn't answer.
-    static List<(byte VAddr, char Port, int Bit)>? Pins(ArduinoDevice arduino, IReadOnlyList<byte> vaddrs, bool wantInput)
+    List<(byte VAddr, char Port, int Bit)>? Pins(IReadOnlyList<byte> vaddrs, bool wantInput)
     {
         var pins = new List<(byte, char, int)>();
         foreach (byte v in vaddrs)
@@ -138,10 +124,15 @@ static class PanelScanSession
 
     internal static string Pin(byte vaddr, char port, int bit) => $"0x{vaddr:X2} {port}{bit}";
 
+    // One panel input as a table cell row: key, pin(s), and Rett level.
+    internal static string FormatInput(string key, SvbSwitchEntry e) => key == SystemConfigJson.Dreieskive
+        ? $"{key,-10} {e.VAddr} {e.Port}  CW=bit{e.BitCw?.ToString() ?? "?"}  CCW=bit{e.BitCcw?.ToString() ?? "?"}"
+        : $"{key,-10} {e.VAddr} {e.Port}{e.Bit}" + (e.Polarity is int p ? $"  Rett = {(p == 1 ? "High" : "Low")}" : "");
+
     // -------------------------------------------------------------------------
     // Step 1: panel LED scan
     // -------------------------------------------------------------------------
-    public static void LedScan(ArduinoDevice arduino)
+    public void LedScan()
     {
         Console.WriteLine();
         Console.WriteLine("--- Panel LED scan (SVB) ---");
@@ -149,10 +140,10 @@ static class PanelScanSession
         Console.WriteLine();
 
         if (PickPanelBoard() is not { } board) return;
-        if (Pins(arduino, board.VAddrs, wantInput: false) is not { } outputs) return;
+        if (Pins(board.VAddrs, wantInput: false) is not { } outputs) return;
         if (outputs.Count == 0) { Console.WriteLine("  No output pins -- upload hardware.json first?"); return; }
 
-        if (ReadPanel(arduino) is not { } panel) return;
+        if (ReadPanel() is not { } panel) return;
         var vaddrs = board.VAddrs.Select(v => $"0x{v:X2}").ToHashSet();
         bool OnThisBoard(PanelLedEntry l) => vaddrs.Contains(l.VAddr ?? "");
 
@@ -200,14 +191,14 @@ static class PanelScanSession
 
         // Only this board's LEDs are replaced -- other panel boards' stay.
         panel.PanelLeds = panel.PanelLeds.Where(l => !OnThisBoard(l)).Concat(leds).ToList();
-        Store(arduino, panel, SystemConfigJson.PanelLedLines(panel.PanelLeds));
+        Store(panel, SystemConfigJson.PanelLedLines(panel.PanelLeds));
         Console.WriteLine();
     }
 
     // -------------------------------------------------------------------------
     // Step 2: panel switch scan
     // -------------------------------------------------------------------------
-    public static void SwitchScan(ArduinoDevice arduino)
+    public void SwitchScan()
     {
         Console.WriteLine();
         Console.WriteLine("--- Panel switch scan (SVB) ---");
@@ -216,7 +207,7 @@ static class PanelScanSession
         Console.WriteLine();
 
         if (PickPanelBoard() is not { } board) return;
-        if (Pins(arduino, board.VAddrs, wantInput: true) is not { } inputs) return;
+        if (Pins(board.VAddrs, wantInput: true) is not { } inputs) return;
         if (inputs.Count == 0) { Console.WriteLine("  No input pins -- upload hardware.json first?"); return; }
 
         // Input mask per (vaddr, port), so output pins (LEDs) never count as a change.
@@ -235,7 +226,7 @@ static class PanelScanSession
             return r;
         }
 
-        if (ReadPanel(arduino) is not { } panel) return;
+        if (ReadPanel() is not { } panel) return;
         // Resume: what's already assigned stays; flip only the remaining switches.
         if (panel.SvbSwitches.Count > 0)
             Console.WriteLine($"Already configured (kept unless reassigned): {string.Join(", ", panel.SvbSwitches.Keys)}");
@@ -332,14 +323,12 @@ static class PanelScanSession
         Console.WriteLine();
         Console.WriteLine($"Assigned {found.Count} input(s):");
         foreach (var (key, e) in found)
-            Console.WriteLine(key == SystemConfigJson.Dreieskive
-                ? $"  {key,-10} {e.VAddr} {e.Port}  CW=bit{e.BitCw?.ToString() ?? "?"}  CCW=bit{e.BitCcw?.ToString() ?? "?"}"
-                : $"  {key,-10} {e.VAddr} {e.Port}{e.Bit}" + (e.Polarity is int p ? $"  Rett = {(p == 1 ? "High" : "Low")}" : ""));
+            Console.WriteLine("  " + FormatInput(key, e));
 
         // Only what changed this run is sent; everything else stays as stored.
         var lines = SystemConfigJson.SvbSwitchLines(found);
         lines.AddRange(cleared.Distinct().Select(SystemConfigJson.ClearSvbSwitchLine));
-        Store(arduino, panel, lines);
+        Store(panel, lines);
         Console.WriteLine();
     }
 }

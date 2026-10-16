@@ -3,11 +3,11 @@ namespace DrammenMJKConfig;
 // Upload/download hardware.json <-> the board hardware table. Run before
 // Motor Scan -- Motor Scan assumes ports are already set up (Port B output,
 // Port A input+pullup on the board being scanned).
-static class HardwareConfigSession
+sealed class HardwareConfigSession(IArduinoDevice arduino)
 {
     const string DefaultPath = "hardware.json";
 
-    public static void Run(ArduinoDevice arduino)
+    public void Run()
     {
         Console.WriteLine();
         Console.WriteLine("--- Hardware config (hardware.json) ---");
@@ -15,8 +15,8 @@ static class HardwareConfigSession
 
         new Menu(
             [
-                ('U', "Upload hardware.json to Arduino", () => Upload(arduino)),
-                ('D', "Download from Arduino to hardware.json", () => Download(arduino)),
+                ('U', "Upload hardware.json to Arduino", Upload),
+                ('D', "Download from Arduino to hardware.json", Download),
             ],
             quitOption: ('Q', "Back")
         ).Run();
@@ -29,7 +29,7 @@ static class HardwareConfigSession
         return string.IsNullOrEmpty(input) ? DefaultPath : input;
     }
 
-    static void Upload(ArduinoDevice arduino)
+    void Upload()
     {
         string path = PromptPath();
         if (!File.Exists(path))
@@ -59,61 +59,27 @@ static class HardwareConfigSession
         Console.WriteLine($"Parsed {rows.Count} chip(s) across {file.Boards.Count} board(s).");
         Console.Write("Uploading...");
 
-        if (!arduino.HardwareConfigUploadStart())
+        string? sendError = arduino.HardwareConfigSend(rows);
+        Console.WriteLine(sendError == null
+            ? " Done. Board hardware table stored and applied live."
+            : $" Failed: {sendError}.");
+        Console.WriteLine();
+    }
+
+    void Download()
+    {
+        string path = PromptPath();
+        HardwareConfigFile file;
+        try { file = File.Exists(path) ? HardwareConfig.Load(path) : new HardwareConfigFile(); }
+        catch (Exception ex)
         {
-            Console.WriteLine(" Arduino did not respond with READY. Aborting.");
+            Console.WriteLine($"Failed to parse {path}: {ex.Message}");
             Console.WriteLine();
             return;
         }
 
-        bool ok = true;
-        foreach (var row in rows)
-        {
-            string line = $"{row.VAddr:X2} {row.IodirA:X2} {row.IodirB:X2} {row.GppuA:X2} {row.GppuB:X2}";
-            if (!arduino.HardwareConfigSendLine(line))
-            {
-                Console.WriteLine($"\nError uploading {row.BoardName} (0x{row.VAddr:X2}). Aborting.");
-                arduino.HardwareConfigUploadAbort();
-                ok = false;
-                break;
-            }
-        }
-
-        if (ok)
-        {
-            Console.WriteLine(arduino.HardwareConfigUploadFinish()
-                ? " Done. Board hardware table stored and applied live."
-                : " Upload finished but device did not confirm storage.");
-        }
-        Console.WriteLine();
-    }
-
-    static void Download(ArduinoDevice arduino)
-    {
-        string path = PromptPath();
-        HardwareConfigFile file = File.Exists(path) ? HardwareConfig.Load(path) : new HardwareConfigFile();
-
-        var rows = new List<(byte VAddr, byte IodirA, byte IodirB, byte GppuA, byte GppuB)>();
-        arduino.HardwareConfigDownloadStart();
-        try
-        {
-            while (true)
-            {
-                string? line = arduino.GetNextHardwareLine(2000);
-                if (line == null) { Console.WriteLine("Timeout waiting for device."); return; }
-                if (line == "END") break;
-
-                var parts = line.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-                if (parts.Length != 5) { Console.WriteLine($"Bad line: '{line}'"); continue; }
-                rows.Add((
-                    Convert.ToByte(parts[0], 16),
-                    Convert.ToByte(parts[1], 16),
-                    Convert.ToByte(parts[2], 16),
-                    Convert.ToByte(parts[3], 16),
-                    Convert.ToByte(parts[4], 16)));
-            }
-        }
-        finally { arduino.HardwareConfigDownloadFinish(); }
+        var rows = arduino.HardwareConfigDownload();
+        if (rows == null) { Console.WriteLine("Timeout or unreadable row from device — hardware.json left unchanged."); return; }
 
         Console.WriteLine($"Downloaded {rows.Count} chip(s) from the device.");
 

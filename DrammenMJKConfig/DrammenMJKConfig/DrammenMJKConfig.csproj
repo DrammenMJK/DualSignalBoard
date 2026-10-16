@@ -10,12 +10,4 @@
   <ItemGroup>
     <PackageReference Include="System.IO.Ports" Version="10.0.11" />
   </ItemGroup>
-  <ItemGroup>
-    <None Update="hardware.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-    <None Update="SystemConfig.json">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
-  </ItemGroup>
 </Project>

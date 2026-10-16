@@ -107,7 +107,7 @@ public class BoardConfigTests
     }
 
     [Test]
-    public void ApplyBoardsFile_SvbOnlyCategory_ExcludedFromScbsButKeptInAllBoards()
+    public void ApplyBoardsFile_SvbOnlyCategory_ExcludedFromScbsButListedAsPanelBoard()
     {
         var file = new BoardsFile
         {
@@ -123,7 +123,7 @@ public class BoardConfigTests
         BoardConfig.ApplyBoardsFile(file);
 
         Assert.That(BoardConfig.Svb.Scbs.Select(s => s.Name), Is.EqualTo(new[] { "An SCB" }));
-        Assert.That(BoardConfig.AllBoards.Select(b => b.Name), Is.EquivalentTo(new[] { "An SCB", "A Panel" }));
+        Assert.That(BoardConfig.PanelBoards.Select(b => b.Name), Is.EqualTo(new[] { "A Panel" }));
     }
 
     [Test]
@@ -191,5 +191,26 @@ public class BoardConfigTests
 
         var ex = Assert.Throws<InvalidOperationException>(() => BoardConfig.ApplyBoardsFile(file));
         Assert.That(ex!.Message, Does.Contain("'1' on Fossli Motors Hoyre and Havna Motors"));
+    }
+
+    static IEnumerable<TestCaseData> InvalidBoards()
+    {
+        yield return new TestCaseData(new BoardDeclaration { Name = "X", Category = "SBC", Chips = ["0x20"] })
+            .SetName("Category typo");
+        yield return new TestCaseData(new BoardDeclaration { Name = "X", Chips = ["0x20"], Switches = ["1", "2"], MotorBits = [1] })
+            .SetName("motorBits shorter than switches");
+        yield return new TestCaseData(new BoardDeclaration { Name = "X", Chips = ["0x20"], SignalBits = [0, 2] })
+            .SetName("signalBits not 3");
+        yield return new TestCaseData(new BoardDeclaration { Name = "X", Chips = ["0x20"], InverterEnable = new InverterEnableDeclaration { Port = "" } })
+            .SetName("inverterEnable port empty");
+    }
+
+    [TestCaseSource(nameof(InvalidBoards))]
+    public void ApplyBoardsFile_InvalidBoard_IsRejectedNamingTheBoard(object board) // object: BoardDeclaration is internal
+    {
+        var file = new BoardsFile { Boards = [(BoardDeclaration)board] };
+
+        var ex = Assert.Throws<InvalidOperationException>(() => BoardConfig.ApplyBoardsFile(file));
+        Assert.That(ex!.Message, Does.Contain("board 'X'"));
     }
 }
