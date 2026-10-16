@@ -78,7 +78,16 @@ sealed class SystemConfigSession(IArduinoDevice arduino)
         if (lines == null) { Console.WriteLine("Timeout waiting for device."); return; }
 
         var file = new SystemConfigFile { Todo = old.Todo, Site = old.Site, Svb = old.Svb };
-        SystemConfigJson.ApplyDownloadLines(file, lines);
+        // The fresh file replaces the old one, so a skipped record would
+        // delete that entry's last good backup.
+        var unreadable = SystemConfigJson.ApplyDownloadLines(file, lines);
+        if (unreadable.Count > 0)
+        {
+            foreach (string line in unreadable) Console.WriteLine($"Unreadable record: '{line}'");
+            Console.WriteLine($"{path} left unchanged.");
+            Console.WriteLine();
+            return;
+        }
 
         try
         {

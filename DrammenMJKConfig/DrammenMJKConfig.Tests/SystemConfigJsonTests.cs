@@ -238,4 +238,28 @@ public class SystemConfigJsonTests
         }
         finally { File.Delete(path); }
     }
+
+    [TestCase("S 2 20 02 00 20 04")]
+    [TestCase("S 2 ZZ 02 00 20 04 05")]
+    [TestCase("L 1FF 07")]
+    [TestCase("X 1 2")]
+    public void ApplyDownloadLines_MalformedLine_IsReturnedAsUnreadable(string line)
+    {
+        var file = new SystemConfigFile();
+
+        var unreadable = SystemConfigJson.ApplyDownloadLines(file, ["S 2 20 02 00 20 04 05", line]);
+
+        Assert.That(unreadable, Is.EqualTo(new[] { line }));
+    }
+
+    [Test]
+    public void ApplyDownloadLines_RecordForUnknownSlot_IsIgnoredNotUnreadable()
+    {
+        var file = new SystemConfigFile();
+
+        var unreadable = SystemConfigJson.ApplyDownloadLines(file, ["S 31 20 02 00 20 04 05"]);
+
+        Assert.That(unreadable, Is.Empty);
+        Assert.That(file.Switches, Is.Empty);
+    }
 }

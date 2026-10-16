@@ -168,8 +168,12 @@ static class SystemConfigJson
     // Marks one LED table entry unused on the board (vaddr FF).
     public static string ClearLedLine(int index) => $"Q {index} FF A 00 FF 00";
 
-    public static void ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
+    // Returns the lines that couldn't be parsed (wrong field count, bad hex,
+    // unknown record). Records for slots/boards boards.json doesn't know are
+    // ignored on purpose and not counted.
+    public static List<string> ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
     {
+        var unreadable = new List<string>();
         var slotToLabel = BoardConfig.AllSwitchSlots().ToDictionary(s => s.Slot, s => s.Label);
         var svbLabels = SvbSwitchLabelOrder();
         bool clearedLeds = false; // the board's LED table replaces the file's, not appends to it
@@ -293,9 +297,13 @@ static class SystemConfigJson
                         };
                         break;
                     }
+                    default:
+                        unreadable.Add(line);
+                        break;
                 }
             }
-            catch (FormatException) { /* skip malformed line */ }
+            catch (Exception e) when (e is FormatException or OverflowException) { unreadable.Add(line); }
         }
+        return unreadable;
     }
 }
