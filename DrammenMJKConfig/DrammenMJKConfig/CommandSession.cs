@@ -61,6 +61,28 @@ sealed class CommandSession(IArduinoDevice arduino, DreieskiveSession dreieskive
         }
     }
 
+    // Per motor: slot (null = not scanned) and where its driver bit is.
+    // Null if a slot's EEPROM read failed -- falling back to the declared pin
+    // then would drive another switch's motor.
+    internal (int? Slot, byte VAddr, int Bit, int? Polarity)[]? ResolveMotors(BoardScb scb)
+    {
+        int count = Math.Min(scb.Switches.Count, 9); // ponytail: single-key 1-9, no board has more yet
+        var motors = new (int? Slot, byte VAddr, int Bit, int? Polarity)[count];
+        for (int i = 0; i < count; i++)
+        {
+            if (!BoardConfig.TryFindSlotByLabel(scb.Switches[i].Label, out int slot))
+            {
+                motors[i] = (null, scb.VirtualAddress, scb.MotorBitFor(i), null);
+                continue;
+            }
+            if (SwitchSlotData.Read(arduino, slot) is not { } d) return null;
+            motors[i] = d.IsConfigured
+                ? (slot, d.MotorVAddr, d.MotorBit, d.Polarity)
+                : (null, scb.VirtualAddress, scb.MotorBitFor(i), null);
+        }
+        return motors;
+    }
+
     // One key per motor (1, 2, 3...), no Enter: each press flips that motor's
     // driver bit, then the list redraws. Motor and feedback are shown and
     // handled independently -- a motor must stay drivable even with broken
@@ -72,16 +94,13 @@ sealed class CommandSession(IArduinoDevice arduino, DreieskiveSession dreieskive
     void RunMotors(BoardScb scb)
     {
         const byte OlatB = 0x15;
-        int count = Math.Min(scb.Switches.Count, 9); // ponytail: single-key 1-9, no board has more yet
-
-        // Per motor: slot (null = not scanned) and where its driver bit is.
-        var motors = Enumerable.Range(0, count).Select(i =>
+        if (ResolveMotors(scb) is not { } motors)
         {
-            if (BoardConfig.TryFindSlotByLabel(scb.Switches[i].Label, out int slot)
-                && SwitchSlotData.Read(arduino, slot) is { IsConfigured: true } d)
-                return (Slot: (int?)slot, VAddr: d.MotorVAddr, Bit: (int)d.MotorBit, Polarity: (int?)d.Polarity);
-            return (Slot: (int?)null, VAddr: scb.VirtualAddress, Bit: scb.MotorBitFor(i), Polarity: (int?)null);
-        }).ToArray();
+            Console.WriteLine("  I2C error reading the switch slots from EEPROM — not driving any motor.");
+            Console.WriteLine();
+            return;
+        }
+        int count = motors.Length;
 
         // -1 = I2C error, else 0/1.
         int MotorLevel(int i)
