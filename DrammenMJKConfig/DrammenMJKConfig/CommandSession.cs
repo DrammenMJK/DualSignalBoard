@@ -3,8 +3,8 @@ using static DrammenMJKConfig.ConfigInputHelpers;
 namespace DrammenMJKConfig;
 
 // Operate a board: pick it (SCB) first, then Motors, Signals, Status Light,
-// Motor Pin Test, Input Test, Track Detection, or Dreieskive (only on the
-// board that declares one), then loop within that
+// Motor Pin Test, Input Test, Track Detection, or Dreieskive (each shown
+// only when the board declares that hardware), then loop within that
 // section so repeated checks don't need re-navigating each time. Motors
 // flip the motor's one drive bit (McpSetBit) and never wait for feedback --
 // feedback (SR) is only displayed, the same split as the runtime, where it
@@ -29,36 +29,37 @@ sealed class CommandSession(IArduinoDevice arduino, DreieskiveSession dreieskive
 
     void RunBoard(BoardScb scb)
     {
+        var items = MenuItems(scb);
         while (true)
         {
             Console.WriteLine();
             Console.WriteLine($"{scb.Name}:");
-            Console.WriteLine("  1 = Motors");
-            Console.WriteLine("  2 = Signals");
-            Console.WriteLine("  3 = Status Light");
-            Console.WriteLine("  4 = Motor Pin Test (raw on/off, for wiring checks)");
-            Console.WriteLine("  5 = Input Test (live poll of feedback / input pins)");
-            Console.WriteLine("  6 = Track Detection (live poll, train present/clear)");
-            bool hasDreieskive = scb.DreieskivePins != null;
-            if (hasDreieskive) Console.WriteLine("  7 = Dreieskive (run CW / CCW / stop)");
+            foreach (var item in items) Console.WriteLine($"  {item.Key} = {item.Text}");
             Console.Write("Choice (Esc for board list): ");
 
-            char maxChoice = hasDreieskive ? '7' : '6';
-            char input = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= maxChoice));
+            char input = ReadChar(ch => ch == EscKey || items.Any(i => i.Key == ch));
             Console.WriteLine(input == EscKey ? "[Esc]" : input.ToString());
             if (input == EscKey) { Console.WriteLine(); return; }
 
-            switch (input)
-            {
-                case '1': RunMotors(scb); break;
-                case '2': RunSignals(scb); break;
-                case '3': RunStatusLight(scb); break;
-                case '4': RunMotorPinTest(scb); break;
-                case '5': RunInputTest(scb); break;
-                case '6': RunTrackDetection(scb); break;
-                case '7': RunDreieskive(scb); break;
-            }
+            items.Single(i => i.Key == input).Run();
         }
+    }
+
+    // Only the sections whose hardware the board declares in boards.json.
+    // Keys stay fixed (gaps allowed) so a key always means the same section.
+    internal (char Key, string Text, Action Run)[] MenuItems(BoardScb scb)
+    {
+        bool hasMotors = scb.Switches.Count > 0;
+        return new (char Key, string Text, bool Present, Action Run)[]
+        {
+            ('1', "Motors", hasMotors, () => RunMotors(scb)),
+            ('2', "Signals", scb.SignalBits != null, () => RunSignals(scb)),
+            ('3', "Status Light", scb.StatusLedPin != null, () => RunStatusLight(scb)),
+            ('4', "Motor Pin Test (raw on/off, for wiring checks)", hasMotors || scb.InverterEnablePin != null, () => RunMotorPinTest(scb)),
+            ('5', "Input Test (live poll of feedback / input pins)", true, () => RunInputTest(scb)),
+            ('6', "Track Detection (live poll, train present/clear)", scb.TrackDetectBit != null, () => RunTrackDetection(scb)),
+            ('7', "Dreieskive (run CW / CCW / stop)", scb.DreieskivePins != null, () => RunDreieskive(scb)),
+        }.Where(i => i.Present).Select(i => (i.Key, i.Text, i.Run)).ToArray();
     }
 
     // Per motor: slot (null = not scanned) and where its driver bit is.

@@ -48,4 +48,20 @@ public class CommandSessionTests
 
         Assert.That(m, Is.EqualTo(((int?)_slot101, (byte)0x40, 3, (int?)0)));
     }
+
+    [Test]
+    public void MenuItems_BareBoard_ShowsOnlyInputTest()
+    {
+        var bare = new BoardScb("Bare", [0x20], 0, null, [], null, null, null, null);
+
+        Assert.That(_session.MenuItems(bare).Select(i => i.Key), Is.EqualTo(new[] { '5' }));
+    }
+
+    [Test]
+    public void MenuItems_FullBoard_ShowsEverySection()
+    {
+        var full = new BoardScb("Full", [0x20], 0, null, [new BoardSwitch("X1")], (4, 5), ('B', 7), ('A', 7), [0, 2, 4], 6);
+
+        Assert.That(_session.MenuItems(full).Select(i => i.Key), Is.EqualTo("1234567".ToCharArray()));
+    }
 }
