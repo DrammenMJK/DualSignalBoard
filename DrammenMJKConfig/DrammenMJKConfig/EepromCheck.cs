@@ -99,6 +99,7 @@ sealed class EepromCheck
                 if (slot != SystemConfigJson.DreieskiveSlot) _problems.Add($"Panel input slot {slot}: dreieskive belongs in slot {SystemConfigJson.DreieskiveSlot}.");
                 if (p[4] != "FF") Pin(vaddr, port, Hex(p[4]), false, "Panel input dreieskive CW");
                 if (p[5] != "FF") Pin(vaddr, port, Hex(p[5]), false, "Panel input dreieskive CCW");
+                if (p[4] != "FF" && p[4] == p[5]) _problems.Add($"Panel input dreieskive: CW and CCW use the same bit {p[4]}.");
                 break;
             case 2:
                 if (slot != SystemConfigJson.AskGreenSlot) _problems.Add($"Panel input slot {slot}: green request belongs in slot {SystemConfigJson.AskGreenSlot}.");

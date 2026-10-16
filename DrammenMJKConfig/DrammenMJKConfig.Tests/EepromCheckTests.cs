@@ -41,6 +41,7 @@ public class EepromCheckTests
     [TestCase("does not fit role", "Q 0 20 B 03 FF 00")]
     [TestCase("unknown kind", "P 0 20 A 00 FF 05 00 00")]
     [TestCase("must be its own slot", "P 0 20 A 00 FF 00 01 00")]
+    [TestCase("CW and CCW use the same bit", "P 30 20 A 00 00 01 FF FF")]
     [TestCase("Unreadable", "S 0 ZZ 00 00 20 00 01")]
     [TestCase("Unreadable", "X 1 2")]
     public void Problems_BrokenRecord_IsReported(string expected, params string[] lines)
