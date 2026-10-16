@@ -16,6 +16,8 @@ sealed class SwitchEntry
 
 // Dreieskive's motor side only (bits 4-5 on the SCB) -- see PLAN_Phase1.md for
 // why the SVB control-switch side lives in svbSwitches["dreieskive"] instead.
+// CwPolarity (set by Command D): 0 = base pin high turns it clockwise,
+// 1 = upper pin high turns it clockwise, null = not determined yet.
 sealed class DreieskiveEntry
 {
     [JsonPropertyName("motorVAddr")] public string? MotorVAddr { get; set; }

@@ -56,7 +56,8 @@ var panelEdit = new PanelEditSession(panelScan);
 var systemConfig = new SystemConfigSession(arduino);
 var switchEdit = new SwitchEditSession(arduino, switchTable);
 var benchTest = new BenchTestSession(arduino);
-var command = new CommandSession(arduino);
+var dreieskive = new DreieskiveSession(arduino);
+var command = new CommandSession(arduino, dreieskive);
 var status = new StatusSession(arduino, switchTable);
 
 var configMenu = new Menu(
@@ -68,6 +69,7 @@ var configMenu = new Menu(
         ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", panelScan.LedScan),
         ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", panelScan.SwitchScan),
         ('6', "Edit panel config (SVB) — fix labeling/polarity mistakes", panelEdit.Run),
+        ('D', "Dreieskive test — run it each way, set which is clockwise", dreieskive.Run),
         ('J', "System Config Backup (backup/restore)",              systemConfig.Run),
         ('E', "Edit switch config — fix labeling/polarity mistakes", switchEdit.Run),
         ('B', "Bench test — probe/read/write raw MCP23017 pins",   benchTest.Run),
