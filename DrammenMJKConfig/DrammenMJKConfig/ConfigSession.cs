@@ -18,6 +18,7 @@ static class ConfigSession
                 ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", () => PanelScanSession.LedScan(arduino)),
                 ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", () => PanelScanSession.SwitchScan(arduino)),
                 ('6', "Edit panel config (SVB) — fix labeling/polarity mistakes",  () => PanelEditSession.Run(arduino)),
+                ('D', "Dreieskive test — run it each way, set which is clockwise", () => DreieskiveSession.Run(arduino)),
                 ('J', "System Config Backup (backup/restore)",              () => SystemConfigSession.Run(arduino)),
                 ('E', "Edit switch config — fix labeling/polarity mistakes", () => SwitchEditSession.Run(arduino)),
                 ('B', "Bench test — probe/read/write raw MCP23017 pins",   () => BenchTestSession.Run(arduino)),

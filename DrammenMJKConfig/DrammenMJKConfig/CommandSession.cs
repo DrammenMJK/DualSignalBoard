@@ -3,7 +3,8 @@ using static DrammenMJKConfig.ConfigInputHelpers;
 namespace DrammenMJKConfig;
 
 // Operate a board: pick it (SCB) first, then Motors, Signals, Status Light,
-// Motor Pin Test, Input Test, or Track Detection, then loop within that
+// Motor Pin Test, Input Test, Track Detection, or Dreieskive (only on the
+// board that declares one), then loop within that
 // section so repeated checks don't need re-navigating each time. Motors
 // flip the motor's one drive bit (McpSetBit) and never wait for feedback --
 // feedback (SR) is only displayed, the same split as the runtime, where it
@@ -49,9 +50,12 @@ static class CommandSession
             Console.WriteLine("  4 = Motor Pin Test (raw on/off, for wiring checks)");
             Console.WriteLine("  5 = Input Test (live poll of feedback / input pins)");
             Console.WriteLine("  6 = Track Detection (live poll, train present/clear)");
+            bool hasDreieskive = scb.DreieskivePins != null;
+            if (hasDreieskive) Console.WriteLine("  7 = Dreieskive (run CW / CCW / stop)");
             Console.Write("Choice (Esc for board list): ");
 
-            char input = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= '6'));
+            char maxChoice = hasDreieskive ? '7' : '6';
+            char input = ReadChar(ch => ch == EscKey || (ch >= '1' && ch <= maxChoice));
             Console.WriteLine(input == EscKey ? "[Esc]" : input.ToString());
             if (input == EscKey) { Console.WriteLine(); return; }
 
@@ -63,6 +67,7 @@ static class CommandSession
                 case '4': RunMotorPinTest(arduino, scb); break;
                 case '5': RunInputTest(arduino, scb); break;
                 case '6': RunTrackDetection(arduino, scb); break;
+                case '7': RunDreieskive(arduino, scb); break;
             }
         }
     }
@@ -293,6 +298,56 @@ static class CommandSession
         Console.ReadKey(intercept: true); // consume the stop key
         Console.WriteLine();
         Console.WriteLine();
+    }
+
+    // Run the dreieskive clockwise / counter-clockwise / stop. Pins come from
+    // boards.json (declared); which pin is clockwise comes from
+    // SystemConfig.json's cwPolarity (Config D's result). The motor has no
+    // feedback and never stops on its own, so it's always stopped on the way
+    // out of this menu.
+    static void RunDreieskive(ArduinoDevice arduino, BoardScb scb)
+    {
+        if (scb.DreieskivePins is not { } pins) return;
+        byte vaddr = scb.VirtualAddress;
+        var file = SystemConfigSession.LoadOrNew();
+        if (file.Dreieskive.CwPolarity is not { } cwPolarity)
+        {
+            Console.WriteLine("  Dreieskive direction not set — run Config D (Dreieskive test) first.");
+            Console.WriteLine();
+            return;
+        }
+        int cwBit = cwPolarity == 0 ? pins.Base : pins.Upper;
+        int ccwBit = cwPolarity == 0 ? pins.Upper : pins.Base;
+
+        try
+        {
+            while (true)
+            {
+                Console.WriteLine();
+                Console.WriteLine($"{scb.Name} dreieskive  (vaddr 0x{vaddr:X2}, CW = B{cwBit}, CCW = B{ccwBit}):");
+                Console.WriteLine("  1 = Run clockwise");
+                Console.WriteLine("  2 = Run counter-clockwise");
+                Console.WriteLine("  3 = Stop");
+                Console.Write("Choice (Esc = stop and back to board menu): ");
+
+                char input = ReadChar(ch => ch == EscKey || ch is '1' or '2' or '3');
+                Console.WriteLine(input == EscKey ? "[Esc]" : input.ToString());
+                if (input == EscKey) { Console.WriteLine(); return; }
+
+                bool ok = input switch
+                {
+                    '1' => DreieskiveSession.Drive(arduino, vaddr, onBit: cwBit, offBit: ccwBit),
+                    '2' => DreieskiveSession.Drive(arduino, vaddr, onBit: ccwBit, offBit: cwBit),
+                    _ => DreieskiveSession.Stop(arduino, vaddr, pins),
+                };
+                string what = input switch { '1' => "Running clockwise", '2' => "Running counter-clockwise", _ => "Stopped" };
+                Console.WriteLine(ok ? $"  {what}." : "  I2C error — no response from the board.");
+            }
+        }
+        finally
+        {
+            DreieskiveSession.Stop(arduino, vaddr, pins);
+        }
     }
 
     // Live poll of the board's track detection bit (always Port A -- see
