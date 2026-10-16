@@ -169,7 +169,7 @@ static class SystemConfigJson
     public static string ClearLedLine(int index) => $"Q {index} FF A 00 FF 00";
 
     // Returns the lines that couldn't be parsed (wrong field count, bad hex,
-    // unknown record). Records for slots/boards boards.json doesn't know are
+    // unknown record or LED role). Records for slots/boards boards.json doesn't know are
     // ignored on purpose and not counted.
     public static List<string> ApplyDownloadLines(SystemConfigFile file, IEnumerable<string> lines)
     {
@@ -225,7 +225,7 @@ static class SystemConfigJson
                     {
                         // Q <idx> <vaddr> <port> <bit> <targetSlot> <role>
                         int role = Convert.ToInt32(parts[6], 16);
-                        if (role >= LedRoles.Length) break;
+                        if (role < 0 || role >= LedRoles.Length) { unreadable.Add(line); break; }
                         string? target = parts[5] == "FF" ? SignalTarget
                             : slotToLabel.GetValueOrDefault(Convert.ToInt32(parts[5], 16));
                         if (target == null) break;

@@ -243,6 +243,7 @@ public class SystemConfigJsonTests
     [TestCase("S 2 ZZ 02 00 20 04 05")]
     [TestCase("L 1FF 07")]
     [TestCase("X 1 2")]
+    [TestCase("Q 0 20 B 01 00 FF")]
     public void ApplyDownloadLines_MalformedLine_IsReturnedAsUnreadable(string line)
     {
         var file = new SystemConfigFile();
