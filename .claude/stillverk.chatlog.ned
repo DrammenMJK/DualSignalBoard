@@ -65,3 +65,21 @@
   positions, and no bearing on any future Phase 2+ autonomous firmware
   runtime (SVB panel switch -> SCB motor, no PC attached) -- that will live
   entirely in firmware and won't go through this C# menu at all.
+
+## Operate menu shows only declared hardware
+
+- Problem seen: Operate offered Signals (and other sections) on a board
+  with no signal hardware.
+- Fix (`CommandSession.MenuItems`): each board-menu section is listed only
+  when `boards.json` declares the hardware it drives:
+  Motors = `switches` non-empty; Signals = `signalBits`; Status Light =
+  `statusLedBit`; Motor Pin Test = `switches` or `inverterEnable`;
+  Track Detection = `trackDetectBit`; Dreieskive = `dreieskive`.
+  Input Test is always shown (it reads IODIR from the chip itself).
+- Keys stay fixed (gaps allowed, e.g. 1, 3, 5) so a key always means the
+  same section; hidden keys are rejected.
+- Source of truth is the declaration in `boards.json`, not SystemConfig.json
+  scan results. A declared-but-unscanned section still shows and then says
+  "run ... scan first".
+- Config menus (Signal scan, Track detection scan, ...) were NOT changed.
+- Branch `operate-menu-hide-missing-hardware`, pushed; no PR yet.
