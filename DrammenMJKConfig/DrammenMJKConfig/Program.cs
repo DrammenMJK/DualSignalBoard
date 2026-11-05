@@ -54,6 +54,8 @@ var hardwareConfig = new HardwareConfigSession(arduino);
 var panelScan = new PanelScanSession(arduino);
 var panelEdit = new PanelEditSession(panelScan);
 var panelBench = new PanelBenchSession(arduino, panelScan);
+var panelLedVerify = new PanelLedVerifySession(arduino, panelScan);
+var panelLedSync = new PanelLedSyncSession(arduino, panelScan);
 var systemConfig = new SystemConfigSession(arduino);
 var switchEdit = new SwitchEditSession(arduino, switchTable);
 var benchTest = new BenchTestSession(arduino);
@@ -70,6 +72,8 @@ var configMenu = new Menu(
         ('4', "Panel LED scan (SVB) — which LED is which pens Rett/Avvik / signal lamp", panelScan.LedScan),
         ('5', "Panel switch scan (SVB) — which input is which pens / dreieskive / green request", panelScan.SwitchScan),
         ('6', "Edit panel config (SVB) — fix labeling/polarity mistakes", panelEdit.Run),
+        ('L', "Panel LEDs — view by pens/board, on/off test",       panelLedVerify.Run),
+        ('K', "Panel LED sync — drive LEDs live from panel switches (no motor needed)", panelLedSync.Run),
         ('P', "Panel bench test (SVB) — all/single LEDs, live switch view", panelBench.Run),
         ('D', "Dreieskive test — run it each way, set which is clockwise", dreieskive.Run),
         ('J', "System Config Backup (backup/restore)",              systemConfig.Run),

@@ -78,7 +78,56 @@
       "bit": 6
     }
   },
-  "svbSwitches": {},
+  "svbSwitches": {
+    "F1": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 4,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 0
+    },
+    "F3": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 5,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 1
+    },
+    "F7": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 6,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 1
+    },
+    "F101": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 1,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 1
+    },
+    "F2": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 0,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 0
+    },
+    "F4": {
+      "vaddr": "0x20",
+      "port": "A",
+      "bit": 2,
+      "bitCw": null,
+      "bitCcw": null,
+      "polarity": 0
+    }
+  },
   "panelLeds": [
     {
       "vaddr": "0x20",
@@ -93,6 +142,97 @@
       "bit": 1,
       "target": "F101",
       "role": "rett"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 2,
+      "target": "F2",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 3,
+      "target": "F7",
+      "role": "avvik"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 4,
+      "target": "F1",
+      "role": "avvik"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 5,
+      "target": "F7",
+      "role": "avvik"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 6,
+      "target": "F1",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 7,
+      "target": "F7",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "A",
+      "bit": 0,
+      "target": "F4",
+      "role": "avvik"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "A",
+      "bit": 1,
+      "target": "F2",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "A",
+      "bit": 2,
+      "target": "F4",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "B",
+      "bit": 4,
+      "target": "F3",
+      "role": "avvik"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "B",
+      "bit": 5,
+      "target": "F3",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "B",
+      "bit": 6,
+      "target": "F5/6",
+      "role": "rett"
+    },
+    {
+      "vaddr": "0x21",
+      "port": "B",
+      "bit": 7,
+      "target": "F5/6",
+      "role": "avvik"
     }
   ],
   "signals": {
