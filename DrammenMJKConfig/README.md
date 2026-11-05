@@ -67,6 +67,39 @@ then U, `20`, `A`, `FF`. See `chatlogs/panel-bench-test.chatlog.md`.
 
 ---
 
+## Layout operation (runtime loop)
+
+In Prod mode the firmware runs the layout from the panel on its own, with no PC attached.
+Design: `PLAN_Runtime.md` in the repo root.
+
+- Every 10 ms it reads the panel switch ports and the pens feedback ports. A bit counts as
+  changed after 3 equal reads in a row.
+- **Panel switch changed:** the pens gets its new motor bit. The dreieskive runs CW or CCW,
+  or stops in the middle position. Motors move only on a panel change.
+- **Pens feedback changed:** the panel LEDs follow it. The pens leaves its position: both
+  LEDs off. It reaches Rett or Avvik: that LED on. Both feedback contacts closed: both LEDs
+  off and an error.
+- At power-up all panel LEDs go dark, then every pens is driven to its panel switch.
+- Panel LEDs are on when low. SCB signal LEDs are on when high.
+- Not handled yet: signal lamps, the green request button, track detection.
+
+Errors (both feedback contacts closed, or dreieskive CW and CCW both active) print a
+`!ERR ...` line on serial and show under Status (S).
+
+The tool pauses the runtime while it is connected, so Operate, the scans and the bench tests
+don't fight it over the pins. It resumes the runtime on Quit (Q), which syncs every pens to
+its panel switch again. Serial commands for this:
+
+| Command | Reply                                             | Meaning                          |
+|---------|---------------------------------------------------|----------------------------------|
+| `RT 0`  | `OK`                                              | Pause the runtime                |
+| `RT 1`  | `OK`                                              | Resume it, sync pens to the panel |
+| `RT`    | `RT <0\|1> <pens error mask, hex> <dreieskive 0\|1>` | State and current errors       |
+
+In TEST mode the runtime never runs (`RT 0`/`RT 1` answer `ERR test mode -- runtime needs I2C`).
+
+---
+
 ## Debug mode (D)
 
 Used to check LED wiring before configuration.
