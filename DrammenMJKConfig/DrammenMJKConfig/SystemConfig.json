@@ -26,27 +26,11 @@
       "feedbackRettBit": 7,
       "feedbackAvvikBit": 6
     },
-    "F5/6": {
-      "motorVAddr": "0x44",
-      "motorBit": 2,
-      "polarity": 0,
-      "feedbackVAddr": "0x44",
-      "feedbackRettBit": 5,
-      "feedbackAvvikBit": 4
-    },
     "F7": {
       "motorVAddr": "0x44",
       "motorBit": 3,
       "polarity": 1,
       "feedbackVAddr": "0x44",
-      "feedbackRettBit": 4,
-      "feedbackAvvikBit": 5
-    },
-    "F4": {
-      "motorVAddr": "0x40",
-      "motorBit": 5,
-      "polarity": 1,
-      "feedbackVAddr": "0x40",
       "feedbackRettBit": 4,
       "feedbackAvvikBit": 5
     },
@@ -65,6 +49,14 @@
       "feedbackVAddr": "0x40",
       "feedbackRettBit": 1,
       "feedbackAvvikBit": 0
+    },
+    "F4": {
+      "motorVAddr": "0x40",
+      "motorBit": 5,
+      "polarity": 1,
+      "feedbackVAddr": "0x40",
+      "feedbackRettBit": 4,
+      "feedbackAvvikBit": 5
     }
   },
   "dreieskive": {
@@ -73,6 +65,10 @@
     "cwPolarity": 1
   },
   "statusLeds": {
+    "Sidespor Motors": {
+      "vaddr": "0x24",
+      "bit": 7
+    },
     "Fossli Motors Hoyre": {
       "vaddr": "0x44",
       "bit": 7
@@ -80,67 +76,37 @@
     "Fossli Motors Venstre": {
       "vaddr": "0x40",
       "bit": 6
-    },
-    "Sidespor Motors": {
-      "vaddr": "0x24",
-      "bit": 7
     }
   },
-  "svbSwitches": {
-    "F1": {
-      "vaddr": null,
-      "port": null,
-      "bit": null,
-      "bitCw": null,
-      "bitCcw": null,
-      "polarity": null
+  "svbSwitches": {},
+  "panelLeds": [
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 0,
+      "target": "F5/6",
+      "role": "avvik"
     },
-    "F3": {
-      "vaddr": null,
-      "port": null,
-      "bit": null,
-      "bitCw": null,
-      "bitCcw": null,
-      "polarity": null
-    },
-    "F5/6": {
-      "vaddr": null,
-      "port": null,
-      "bit": null,
-      "bitCw": null,
-      "bitCcw": null,
-      "polarity": null
-    },
-    "F7": {
-      "vaddr": null,
-      "port": null,
-      "bit": null,
-      "bitCw": null,
-      "bitCcw": null,
-      "polarity": null
-    },
-    "dreieskive": {
-      "vaddr": null,
-      "port": null,
-      "bit": null,
-      "bitCw": null,
-      "bitCcw": null,
-      "polarity": null
+    {
+      "vaddr": "0x20",
+      "port": "B",
+      "bit": 1,
+      "target": "F101",
+      "role": "rett"
     }
-  },
-  "panelLeds": [],
+  ],
   "signals": {
-    "Fossli Motors Venstre": {
-      "vaddr": "0x40",
-      "redBit": 0,
-      "green1Bit": 4,
-      "green2Bit": 2
-    },
     "Fossli Motors Hoyre": {
       "vaddr": "0x44",
       "redBit": 4,
       "green1Bit": 2,
       "green2Bit": 0
+    },
+    "Fossli Motors Venstre": {
+      "vaddr": "0x40",
+      "redBit": 0,
+      "green1Bit": 4,
+      "green2Bit": 2
     }
   },
   "trackDetection": {
@@ -151,13 +117,13 @@
     }
   },
   "inverterEnables": {
-    "Fossli Motors Venstre": {
-      "vaddr": "0x40",
+    "Fossli Motors Hoyre": {
+      "vaddr": "0x44",
       "port": "A",
       "bit": 7
     },
-    "Fossli Motors Hoyre": {
-      "vaddr": "0x44",
+    "Fossli Motors Venstre": {
+      "vaddr": "0x40",
       "port": "A",
       "bit": 7
     }

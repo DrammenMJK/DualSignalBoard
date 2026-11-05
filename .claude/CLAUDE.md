@@ -28,3 +28,11 @@ evidence the MTP runner is what's actually executing tests here.)
 port and returns whichever one answers `PING`/`SI` — don't hardcode a port
 number, it isn't stable across sessions (it's been observed to drop and
 reappear mid-session on this machine).
+
+## Chatlogs
+
+Findings from past sessions live in `chatlogs/` at the repo root, one
+Markdown file per topic, named `<topic>.chatlog.md` (e.g.
+`chatlogs/stillverk.chatlog.md`, `chatlogs/mcp23017-i2c-bus.chatlog.md`).
+Read the relevant one before working on that topic, and write new chatlogs
+there with the `.md` extension.

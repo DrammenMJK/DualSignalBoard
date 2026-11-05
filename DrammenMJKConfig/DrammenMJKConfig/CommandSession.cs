@@ -8,7 +8,7 @@ namespace DrammenMJKConfig;
 // section so repeated checks don't need re-navigating each time. Motors
 // flip the motor's one drive bit (McpSetBit) and never wait for feedback --
 // feedback (SR) is only displayed, the same split as the runtime, where it
-// just lights the panel LEDs (see .claude/stillverk.chatlog.ned, "Motor
+// just lights the panel LEDs (see chatlogs/stillverk.chatlog.md, "Motor
 // drive vs feedback"). Signals, the status light, and Motor Pin Test also
 // write raw bits with McpSetBit. Input Test and Track Detection
 // are read-only live polls (McpReadPort) -- see RunInputTest/

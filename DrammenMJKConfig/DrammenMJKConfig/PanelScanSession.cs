@@ -96,7 +96,7 @@ sealed class PanelScanSession(IArduinoDevice arduino)
         }
     }
 
-    static (string Name, IReadOnlyList<byte> VAddrs)? PickPanelBoard()
+    internal static (string Name, IReadOnlyList<byte> VAddrs)? PickPanelBoard()
     {
         var boards = BoardConfig.PanelBoards;
         if (boards.Count == 0) { Console.WriteLine("  No SVB/Combined board in boards.json."); return null; }
@@ -106,7 +106,7 @@ sealed class PanelScanSession(IArduinoDevice arduino)
 
     // Every (vaddr, port, bit) whose IODIR bit equals `wantInput`. Null if a
     // chip doesn't answer.
-    List<(byte VAddr, char Port, int Bit)>? Pins(IReadOnlyList<byte> vaddrs, bool wantInput)
+    internal List<(byte VAddr, char Port, int Bit)>? Pins(IReadOnlyList<byte> vaddrs, bool wantInput)
     {
         var pins = new List<(byte, char, int)>();
         foreach (byte v in vaddrs)
@@ -121,6 +121,9 @@ sealed class PanelScanSession(IArduinoDevice arduino)
         }
         return pins;
     }
+
+    // Pin level that lights (or darkens) a panel LED. Panel LEDs are active-low: on = low.
+    internal static bool LedLevel(bool lit) => !lit;
 
     internal static string Pin(byte vaddr, char port, int bit) => $"0x{vaddr:X2} {port}{bit}";
 
@@ -162,14 +165,17 @@ sealed class PanelScanSession(IArduinoDevice arduino)
         var todo = outputs.Where(p => !done.Contains(($"0x{p.VAddr:X2}", p.Port.ToString(), p.Bit))).ToList();
         Console.WriteLine($"{todo.Count} output pin(s) to go. Pins answered 0 (unused) aren't stored, so a resumed scan asks them again.");
 
+        // Boot leaves OLAT at 0x00, which lights every active-low LED -- start dark.
+        foreach (var (v, port, bit) in outputs) arduino.McpSetBit(v, port, bit, LedLevel(lit: false));
+
         bool stopped = false;
         foreach (var (v, port, bit) in todo)
         {
-            arduino.McpSetBit(v, port, bit, true);
+            arduino.McpSetBit(v, port, bit, LedLevel(lit: true));
             Console.WriteLine();
             Console.WriteLine($"  {Pin(v, port, bit)} lit.");
             bool answered = AskLedTarget(out string? target, out string? role);
-            arduino.McpSetBit(v, port, bit, false);
+            arduino.McpSetBit(v, port, bit, LedLevel(lit: false));
 
             if (!answered) { stopped = true; break; }
             if (target != null)
