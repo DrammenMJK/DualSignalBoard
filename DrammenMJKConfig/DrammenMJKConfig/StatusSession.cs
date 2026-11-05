@@ -14,6 +14,7 @@ sealed class StatusSession(IArduinoDevice arduino, SwitchTable switchTable)
         int chipCount = PrintBoardHardwareTable();
         var (switchCount, totalSwitches) = PrintSystemConfig();
         PrintMode(chipCount, switchCount, totalSwitches);
+        PrintRuntime();
 
         Console.WriteLine();
     }
@@ -34,6 +35,20 @@ sealed class StatusSession(IArduinoDevice arduino, SwitchTable switchTable)
                 ? "CONFIGURATION — hardware set, switches incomplete"
                 : "NORMAL — hardware and all switches configured";
         Console.WriteLine($"  {mode}");
+    }
+
+    // Live firmware state of the runtime loop and the errors it has seen.
+    void PrintRuntime()
+    {
+        Console.WriteLine();
+        Console.WriteLine("--- Runtime loop ---");
+        if (arduino.GetRuntimeStatus() is not { } rt) { Console.WriteLine("  No answer to RT (TEST mode or old firmware)."); return; }
+
+        Console.WriteLine(rt.On ? "  Running (panel drives the layout)." : "  Paused (config tool connected).");
+        var labels = BoardConfig.AllSwitchSlots().ToDictionary(s => s.Slot, s => s.Label);
+        foreach (int slot in rt.PensErrorSlots)
+            Console.WriteLine($"  ERROR: pens {labels.GetValueOrDefault(slot, $"slot {slot}")} feedback 00 -- both contacts closed.");
+        if (rt.DreieskiveError) Console.WriteLine("  ERROR: dreieskive CW and CCW both active -- stopped.");
     }
 
     int PrintBoardHardwareTable()

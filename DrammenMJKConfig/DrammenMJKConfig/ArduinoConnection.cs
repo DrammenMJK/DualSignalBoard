@@ -58,6 +58,7 @@ sealed class ArduinoConnection : IDisposable
             Open();
             Thread.Sleep(2000); // ponytail: fixed boot wait, poll PING if it proves too short/long
             Console.WriteLine($"\r[!] Reconnected on {_port.PortName}.");
+            SendAfterReconnect();
             return true;
         }
         catch (Exception ex)
@@ -65,6 +66,18 @@ sealed class ArduinoConnection : IDisposable
             Console.WriteLine($"\r[!] Reconnect failed: {ex.Message} -- check the USB cable, then retry.");
             return false;
         }
+    }
+
+    // Sent right after a reconnect, before the pending command: reopening the
+    // port reboots the board, which undoes anything the tool had set (the
+    // runtime pause). Its one reply line is swallowed.
+    public string? ReconnectCommand { get; set; }
+
+    void SendAfterReconnect()
+    {
+        if (ReconnectCommand == null) return;
+        _port.WriteLine(ReconnectCommand);
+        if (_capturing) _captureQueue.TryTake(out _, 1000);
     }
 
     // Redirect Arduino output into a queue instead of printing it.

@@ -538,6 +538,7 @@ sealed class ConfigSession(IArduinoDevice arduino)
         // the watchdog reset + bootloader + setup() + the banner itself to
         // arrive over serial.
         Thread.Sleep(1500);
+        arduino.SetRuntime(false); // the reboot started the runtime loop again
         Console.WriteLine();
     }
 

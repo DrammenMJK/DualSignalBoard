@@ -32,6 +32,15 @@ struct SwitchRec {
     bool configured;
 };
 enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
+// Runtime loop watch lists (see "Runtime loop" below).
+struct RtPort {
+    uint8_t vaddr, isB;
+    uint8_t stable;     // last debounced value
+    uint8_t candidate;  // value being debounced
+    uint8_t count;      // ticks candidate has been seen in a row
+    bool    valid;      // false until the first debounced read: every bit counts as changed
+};
+struct RtLedPort { uint8_t vaddr, isB, value; bool dirty; };
 
 // ---------------------------------------------------------------------------
 // EEPROM layout (new — unrelated to the older Pens-letter Region1-6 layout)
@@ -132,7 +141,7 @@ enum SwitchState : uint8_t { SW_RETT, SW_AVVIK, SW_BETWEEN, SW_FAULT };
 // SVB panel LEDs -- one entry per LED. Target is a switch-table slot (pens)
 // or 0xFF for the panel's signal lamp. Role: 0 = Rett, 1 = Avvik (pens),
 // 2 = Red, 3 = Green1, 4 = Green2 (signal). 0xFF in VAddr = unused entry.
-// Stored only; the runtime that lights them from feedback comes later.
+// The runtime loop lights them from the pens feedback (rt_feedback_event).
 #define PLED_CAP             48
 #define REGION_PLED_VADDR    0x280 // PanelLedVAddr[48]
 #define REGION_PLED_PORTBIT  0x2B0 // PanelLedPortBit[48]: bit | (isB << 3)
@@ -340,7 +349,7 @@ static void apply_all_board_hw() {
 
 // ---------------------------------------------------------------------------
 // Switch table — resolve_switch() is the one function both SW/SR and the
-// (future, Phase 2+) autonomous runtime loop will call.
+// runtime loop (rt_drive_pens) use.
 // ---------------------------------------------------------------------------
 static SwitchRec resolve_switch(uint8_t slot) {
     SwitchRec r;
@@ -376,11 +385,236 @@ static const __FlashStringHelper* switchStateName(SwitchState s) {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime loop -- the panel controls the layout with no PC attached.
+// See PLAN_Runtime.md. Event driven, no per-pens state: every 10 ms each
+// watched port (panel inputs + pens feedback) is read once, debounced, and a
+// changed bit is an event:
+//   panel switch changed -> set that pens' motor bit (or run the dreieskive)
+//   feedback changed     -> LEDs follow it: left position = both off,
+//                           reached Rett/Avvik = that LED on, 00 = error.
+// Motors move only on panel events. Panel LEDs are active-low.
+// ---------------------------------------------------------------------------
+#define RT_TICK_MS     10
+#define RT_DEBOUNCE    3   // same reading this many ticks in a row = stable
+#define RT_PORT_CAP    16
+#define RT_LEDPORT_CAP 8
+
+
+
+static bool          g_runtimeOn = false;
+static unsigned long g_rtLastTick;
+static RtPort        g_rtPorts[RT_PORT_CAP];
+static uint8_t       g_rtPortCount;
+static RtLedPort     g_rtLedPorts[RT_LEDPORT_CAP];
+static uint8_t       g_rtLedPortCount;
+static uint32_t      g_rtPensError;  // bit per switch slot: feedback reads 00 (both contacts closed)
+static bool          g_rtDreiError;  // dreieskive CW and CCW both active
+
+static void rt_add_port(uint8_t vaddr, uint8_t isB) {
+    for (uint8_t i = 0; i < g_rtPortCount; i++)
+        if (g_rtPorts[i].vaddr == vaddr && g_rtPorts[i].isB == isB) return;
+    if (g_rtPortCount == RT_PORT_CAP) return;
+    RtPort& p = g_rtPorts[g_rtPortCount++];
+    p.vaddr = vaddr; p.isB = isB; p.count = 0; p.valid = false;
+}
+
+static RtLedPort* rt_led_port(uint8_t vaddr, uint8_t isB) {
+    for (uint8_t i = 0; i < g_rtLedPortCount; i++)
+        if (g_rtLedPorts[i].vaddr == vaddr && g_rtLedPorts[i].isB == isB) return &g_rtLedPorts[i];
+    return nullptr;
+}
+
+// Turns every panel LED for this pens slot and role on or off (buffered).
+static void rt_set_led(uint8_t slot, uint8_t role, bool lit) {
+    for (uint8_t i = 0; i < PLED_CAP; i++) {
+        uint8_t va = EEPROM.read(REGION_PLED_VADDR + i);
+        if (va == 0xFF || EEPROM.read(REGION_PLED_TARGET + i) != slot || EEPROM.read(REGION_PLED_ROLE + i) != role) continue;
+        uint8_t pb = EEPROM.read(REGION_PLED_PORTBIT + i);
+        RtLedPort* lp = rt_led_port(va, (pb & 0x08) ? 1 : 0);
+        if (!lp) continue;
+        uint8_t mask = (uint8_t)(1 << (pb & 0x07));
+        uint8_t next = lit ? (uint8_t)(lp->value & ~mask) : (uint8_t)(lp->value | mask); // active-low
+        if (next != lp->value) { lp->value = next; lp->dirty = true; }
+    }
+}
+
+static void rt_flush_leds() {
+    for (uint8_t i = 0; i < g_rtLedPortCount; i++) {
+        RtLedPort& lp = g_rtLedPorts[i];
+        if (!lp.dirty) continue;
+        bool okFlag;
+        mcp_write_reg(lp.vaddr, lp.isB ? MCP_OLATB : MCP_OLATA, lp.value, &okFlag);
+        if (okFlag) lp.dirty = false; // failed write: retried next tick
+    }
+}
+
+// Read-modify-write one OLATB bit, the same as cmdSW (no shadow: never pushes stale bits).
+static bool rt_set_portb_bit(uint8_t vaddr, uint8_t bit, uint8_t level) {
+    bool okFlag;
+    uint8_t cur = mcp_read_reg(vaddr, MCP_OLATB, &okFlag);
+    if (!okFlag) return false;
+    uint8_t next = level ? (uint8_t)(cur | (1 << bit)) : (uint8_t)(cur & ~(1 << bit));
+    if (next != cur) mcp_write_reg(vaddr, MCP_OLATB, next, &okFlag);
+    return okFlag;
+}
+
+// Pens motor to the panel's position. Motors are stall-hold, so writing the
+// position it already has does nothing.
+static void rt_drive_pens(uint8_t slot, bool rett) {
+    SwitchRec r = resolve_switch(slot);
+    if (!r.configured) return;
+    rt_set_portb_bit(r.motorVAddr, r.motorBit, rett ? r.polarity : (uint8_t)(1 - r.polarity));
+}
+
+// dir: 0 = stop, 1 = CW, 2 = CCW. Upper pin is always base+1 (PLAN_Phase1.md).
+// The off pin drops before the on pin rises, so both are never high together.
+static void rt_drive_dreieskive(uint8_t dir) {
+    uint8_t va = EEPROM.read(ADDR_DREI_VADDR);
+    if (va == 0xFF) return;
+    uint8_t base = EEPROM.read(ADDR_DREI_PINBASE);
+    uint8_t cwBit = EEPROM.read(ADDR_DREI_CWPOL) == 0 ? base : (uint8_t)(base + 1);
+    uint8_t ccwBit = cwBit == base ? (uint8_t)(base + 1) : base;
+    rt_set_portb_bit(va, dir == 1 ? ccwBit : cwBit, 0);
+    if (dir == 0) rt_set_portb_bit(va, ccwBit, 0);
+    else rt_set_portb_bit(va, dir == 1 ? cwBit : ccwBit, 1);
+}
+
+static void rt_panel_event(const RtPort& p, uint8_t changed) {
+    for (uint8_t s = 0; s < SVBSW_CAP; s++) {
+        if (EEPROM.read(REGION_SVBSW_VADDR + s) != p.vaddr || EEPROM.read(REGION_SVBSW_PORT + s) != p.isB) continue;
+        uint8_t bitPri = EEPROM.read(REGION_SVBSW_BITPRI + s);
+        uint8_t bitSec = EEPROM.read(REGION_SVBSW_BITSEC + s);
+        uint8_t kind = EEPROM.read(REGION_SVBSW_KIND + s);
+        if (kind == 0 && (changed >> bitPri & 1)) {
+            bool rett = ((p.stable >> bitPri) & 1) == EEPROM.read(REGION_SVBSW_POL + s);
+            rt_drive_pens(EEPROM.read(REGION_SVBSW_TGTSLOT + s), rett);
+        }
+        else if (kind == 1 && ((changed >> bitPri & 1) || (changed >> bitSec & 1))) {
+            // shortcut: dreieskive inputs assumed active-low (pull-up, switch to GND);
+            // add a stored polarity if a panel ever wires them the other way.
+            bool cw = !((p.stable >> bitPri) & 1), ccw = !((p.stable >> bitSec) & 1);
+            bool both = cw && ccw;
+            if (both && !g_rtDreiError) status(F("ERR dreieskive CW and CCW both active -- stopped"));
+            g_rtDreiError = both;
+            rt_drive_dreieskive(both ? 0 : cw ? 1 : ccw ? 2 : 0);
+        }
+        // kind 2 (green request): not in version 1.
+    }
+}
+
+static void rt_feedback_event(const RtPort& p, uint8_t changed) {
+    for (uint8_t slot = 0; slot < SWITCH_CAP; slot++) {
+        SwitchRec r = resolve_switch(slot);
+        if (!r.configured || r.fbVAddr != p.vaddr) continue;
+        if (!((changed >> r.fbRettBit & 1) || (changed >> r.fbAvvikBit & 1))) continue;
+        uint8_t rettVal = (p.stable >> r.fbRettBit) & 1, avvikVal = (p.stable >> r.fbAvvikBit) & 1;
+        bool fault = !rettVal && !avvikVal;
+        rt_set_led(slot, 0, rettVal && !avvikVal);  // Rett reached
+        rt_set_led(slot, 1, !rettVal && avvikVal);  // Avvik reached
+        uint32_t bit = (uint32_t)1 << slot;
+        if (fault && !(g_rtPensError & bit)) {
+            Serial.print(F("!ERR pens "));
+            Serial.print(slot);
+            Serial.println(F(" feedback 00 -- both contacts closed"));
+        }
+        g_rtPensError = fault ? (g_rtPensError | bit) : (g_rtPensError & ~bit);
+    }
+}
+
+static bool rt_is_panel_port(const RtPort& p) {
+    for (uint8_t s = 0; s < SVBSW_CAP; s++)
+        if (EEPROM.read(REGION_SVBSW_VADDR + s) == p.vaddr && EEPROM.read(REGION_SVBSW_PORT + s) == p.isB) return true;
+    return false;
+}
+
+static void rt_tick() {
+    for (uint8_t i = 0; i < g_rtPortCount; i++) {
+        RtPort& p = g_rtPorts[i];
+        bool okFlag;
+        uint8_t v = mcp_read_reg(p.vaddr, p.isB ? MCP_GPIOB : MCP_GPIOA, &okFlag);
+        if (!okFlag) { p.count = 0; continue; } // keep the last stable value, act on nothing
+        if (p.count == 0 || v != p.candidate) { p.candidate = v; p.count = 1; continue; }
+        if (p.count < RT_DEBOUNCE) p.count++;
+        if (p.count < RT_DEBOUNCE || (p.valid && v == p.stable)) continue;
+
+        uint8_t changed = p.valid ? (uint8_t)(v ^ p.stable) : 0xFF;
+        p.stable = v;
+        p.valid = true;
+        // Feedback ports are port A (read_switch_state's convention); a chip can be both.
+        if (rt_is_panel_port(p)) rt_panel_event(p, changed);
+        if (!p.isB) rt_feedback_event(p, changed);
+    }
+    rt_flush_leds();
+}
+
+// Builds the watch lists from EEPROM, darkens every panel LED, and forgets
+// all readings -- so the first debounced read of every port is an event:
+// each pens is driven to its panel position and its LED follows the feedback.
+// Used at boot and on "RT 1".
+static void rt_start() {
+    g_rtPortCount = 0;
+    g_rtLedPortCount = 0;
+    g_rtPensError = 0;
+    g_rtDreiError = false;
+    for (uint8_t s = 0; s < SVBSW_CAP; s++) {
+        uint8_t va = EEPROM.read(REGION_SVBSW_VADDR + s);
+        if (va != 0xFF) rt_add_port(va, EEPROM.read(REGION_SVBSW_PORT + s));
+    }
+    for (uint8_t slot = 0; slot < SWITCH_CAP; slot++) {
+        SwitchRec r = resolve_switch(slot);
+        if (r.configured) rt_add_port(r.fbVAddr, 0);
+    }
+    for (uint8_t i = 0; i < PLED_CAP; i++) {
+        uint8_t va = EEPROM.read(REGION_PLED_VADDR + i);
+        if (va == 0xFF) continue;
+        uint8_t pb = EEPROM.read(REGION_PLED_PORTBIT + i);
+        uint8_t isB = (pb & 0x08) ? 1 : 0;
+        RtLedPort* lp = rt_led_port(va, isB);
+        if (!lp) {
+            if (g_rtLedPortCount == RT_LEDPORT_CAP) continue;
+            lp = &g_rtLedPorts[g_rtLedPortCount++];
+            bool okFlag;
+            lp->vaddr = va; lp->isB = isB;
+            lp->value = mcp_read_reg(va, isB ? MCP_OLATB : MCP_OLATA, &okFlag); // keep non-LED bits as they are
+        }
+        lp->value |= (uint8_t)(1 << (pb & 0x07)); // dark (active-low)
+        lp->dirty = true;
+    }
+    rt_flush_leds();
+    g_rtLastTick = millis();
+    g_runtimeOn = true;
+}
+
+static void rt_service() {
+    if (!g_runtimeOn || millis() - g_rtLastTick < RT_TICK_MS) return;
+    g_rtLastTick = millis();
+    rt_tick();
+}
+
+// ---------------------------------------------------------------------------
 // Command handlers
 // (strtok state is live on entry -- use strtok(nullptr, " ") for next token)
 // ---------------------------------------------------------------------------
 
 static void cmdPing() { Serial.println(F("PONG")); }
+
+// "RT 0" stops the runtime loop, "RT 1" starts it again (with the boot sync:
+// every pens to its panel position). "RT" alone reports
+// "RT <0|1> <pens error mask, hex> <dreieskive error 0|1>". The config tool
+// stops the runtime while connected so the two don't drive the same pins.
+static void cmdRT() {
+    char* arg = strtok(nullptr, " ");
+    if (!arg) {
+        char buf[32];
+        snprintf(buf, sizeof(buf), "RT %d %08lX %d", g_runtimeOn ? 1 : 0, (unsigned long)g_rtPensError, g_rtDreiError ? 1 : 0);
+        Serial.println(buf);
+        return;
+    }
+    if (arg[1] != '\0' || (arg[0] != '0' && arg[0] != '1')) { errCmd(F("bad arg -- use 0 or 1")); return; }
+    if (!g_prodMode) { errCmd(F("test mode -- runtime needs I2C")); return; }
+    if (arg[0] == '1') rt_start(); else g_runtimeOn = false;
+    ok();
+}
 
 static void cmdSI() {
     Serial.print(F("SITE 1 MODE "));
@@ -1037,6 +1271,7 @@ static void dispatch(char* line) {
     else if (strcmp_P(cmd, PSTR("SCU"))   == 0) cmdSCU();
     else if (strcmp_P(cmd, PSTR("SCD"))   == 0) cmdSCD();
     else if (strcmp_P(cmd, PSTR("SETMODE")) == 0) cmdSETMODE();
+    else if (strcmp_P(cmd, PSTR("RT"))    == 0) cmdRT();
     else if (strcmp_P(cmd, PSTR("RST"))   == 0) softReset();
     else {
         Serial.print(F("ERR unknown: "));
@@ -1064,6 +1299,7 @@ void setup() {
         // bring-up just skips the missing board.
         Wire.setWireTimeout(3000 /* us */, true /* reset TWI HW on timeout */);
         apply_all_board_hw(); // data-driven bring-up; a no-op until hardware.json is uploaded once
+        rt_start();           // panel controls the layout from here on, PC or not
     } else {
         // Test mode (default): TWI peripheral is never touched -- mcp_*_reg()
         // refuses on g_prodMode alone, before ever reaching Wire. Set SDA/SCL
@@ -1076,11 +1312,32 @@ void setup() {
 
     status(F("LysKontroll Firmware Phase 1"));
     status(g_prodMode ? F("Mode: PROD (I2C active)") : F("Mode: TEST (I2C off -- SETMODE P, then RST, to enable)"));
-    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MRR I2CD SETMODE MPOLL MBIT HWU HWD SW SR SCU SCD RST"));
+    status(F("Commands: PING SI ER EW EC MDIR MPU MW MR MRR I2CD SETMODE MPOLL MBIT HWU HWD SW SR SCU SCD RT RST"));
+}
+
+// Collects serial bytes without waiting and dispatches each complete line,
+// so the runtime keeps polling with no PC attached. Bulk commands (HWU, SCU)
+// still read their follow-up lines with the blocking readLine().
+static void serviceSerial() {
+    static char line[48];
+    static uint8_t n = 0;
+    static bool overflow = false;
+    while (Serial.available()) {
+        char c = (char)Serial.read();
+        if (c == '\n') {
+            if (n > 0 && line[n - 1] == '\r') n--;
+            line[n] = '\0';
+            if (!overflow && n > 0) dispatch(line);
+            n = 0;
+            overflow = false;
+            return; // one command per pass, so the runtime gets its turn
+        }
+        if (n < sizeof(line) - 1) line[n++] = c;
+        else overflow = true; // too long: drop the whole line
+    }
 }
 
 void loop() {
-    char line[48];
-    if (!readLine(line, sizeof(line))) return;
-    dispatch(line);
+    serviceSerial();
+    rt_service();
 }

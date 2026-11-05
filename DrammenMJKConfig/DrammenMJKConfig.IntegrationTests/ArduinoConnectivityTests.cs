@@ -13,4 +13,18 @@ public class ArduinoConnectivityTests
             Assert.That(device.Init(), Is.True);
         }
     }
+
+    // PROD mode only: TEST mode answers "ERR test mode".
+    [Test]
+    public void Runtime_PausesAndResumes()
+    {
+        var (conn, device) = ArduinoTestHelper.Connect();
+        using (conn)
+        {
+            Assert.That(device.SetRuntime(false), Is.True);
+            Assert.That(device.GetRuntimeStatus()?.On, Is.False);
+            Assert.That(device.SetRuntime(true), Is.True);
+            Assert.That(device.GetRuntimeStatus()?.On, Is.True);
+        }
+    }
 }

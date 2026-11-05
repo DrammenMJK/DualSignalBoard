@@ -43,6 +43,17 @@ Console.WriteLine(prod switch
     false => "Mode: TEST (I2C OFF -- board won't respond on the bus. Config -> M to switch to Prod.)",
     null => "Mode: unknown -- no response querying SI.",
 });
+
+// The firmware's runtime loop (panel drives pens and LEDs) would fight
+// Operate, the scans and the bench tests over the same pins: pause it while
+// connected, and again after any reconnect (reopening the port reboots the board).
+if (prod == true)
+{
+    conn.ReconnectCommand = "RT 0";
+    Console.WriteLine(arduino.SetRuntime(false)
+        ? "Runtime loop paused while connected (resumes on Quit)."
+        : "Runtime loop: no answer to RT -- old firmware? The panel may still drive pens.");
+}
 Console.WriteLine();
 Console.WriteLine("Ready.");
 Console.WriteLine();
@@ -101,4 +112,6 @@ new Menu(
     quitOption: ('Q', "Quit")
 ).Run();
 
+if (prod == true && arduino.SetRuntime(true))
+    Console.WriteLine("Runtime loop resumed: the panel drives the layout.");
 Console.WriteLine("Goodbye.");

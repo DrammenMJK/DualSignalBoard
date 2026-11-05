@@ -33,5 +33,9 @@ interface IArduinoDevice
     bool SetInverterEnable(byte vaddr, char port, int bit);
     bool SetTrackDetection(byte vaddr, int bit, bool activeHigh);
 
+    // Firmware runtime loop (panel drives the layout): pause while the tool is connected.
+    bool SetRuntime(bool on);
+    RuntimeStatus? GetRuntimeStatus();
+
     void SoftReset();
 }

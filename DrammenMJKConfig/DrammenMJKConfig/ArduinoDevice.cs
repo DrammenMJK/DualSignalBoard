@@ -307,5 +307,9 @@ sealed class ArduinoDevice : IArduinoDevice
     // Misc
     // -------------------------------------------------------------------------
 
+    public bool SetRuntime(bool on) => Ask($"RT {(on ? 1 : 0)}") == "OK";
+
+    public RuntimeStatus? GetRuntimeStatus() => RuntimeStatus.Parse(Ask("RT"));
+
     public void SoftReset() => _conn.SendLine("RST");
 }
