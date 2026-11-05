@@ -39,6 +39,34 @@ C = Config mode    O = Operate    S = Status    Q = Quit
 
 ---
 
+## Setting up a new Arduino
+
+1. Upload the firmware (Arduino Uno compatible board):
+
+   ```txt
+   arduino-cli compile --fqbn arduino:avr:uno Firmware
+   arduino-cli upload  --fqbn arduino:avr:uno -p COM3 Firmware
+   ```
+
+   Run from the repo root. `arduino-cli board list` shows the port.
+2. Start the tool. A blank EEPROM boots in TEST mode (I2C off).
+3. Config → **M**: switch to Prod, then Config → **A** to restart.
+4. Config → **H** → **U**: upload `hardware.json`.
+5. Config → **J** → **U**: upload `SystemConfig.json`. Skip this for an empty board.
+6. Config → **A**: restart, so the firmware sets up the chips from the new table.
+
+Order matters: `hardware.json` must come before `SystemConfig.json`. The status LED,
+signal, inverter-enable and track records look up their board in the hardware table, and
+the upload stops with `ERR board not in hardware table -- upload hardware.json first`
+without it. The mode only gates I2C, not EEPROM writes, but the bench tests need Prod.
+
+Bench without the I2C mux: every bus reaches the same chips, so motor board vaddr 0x40
+(Fossli Motors Venstre) lands on the panel chip at 0x20 and sets its A7 to output at
+each boot. Workaround after each restart: Config → B → D, address `20`, port `A`, `FF`;
+then U, `20`, `A`, `FF`. See `chatlogs/panel-bench-test.chatlog.md`.
+
+---
+
 ## Debug mode (D)
 
 Used to check LED wiring before configuration.
